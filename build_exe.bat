@@ -24,6 +24,7 @@ pyinstaller --noconfirm --clean --onefile --name AlphaScope -d noarchive ^
     --copy-metadata huggingface-hub --copy-metadata safetensors --copy-metadata pyyaml ^
     --hidden-import app.market_data.providers.massive_provider ^
     --add-data "app\web;app\web" ^
+    --icon "app_icon.ico" ^
     desktop_launcher.py
 
 if not exist "dist\AlphaScope.exe" (
