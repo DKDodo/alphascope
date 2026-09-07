@@ -1,0 +1,19 @@
+# Lightweight dependency set for cloud/web deploys (Dockerfile uses this).
+# Deliberately excludes torch/transformers (FinBERT): the desktop build
+# keeps full sentiment scoring, but omitting ~800MB of ML dependencies here
+# lets the web deploy fit free-tier RAM/disk limits. News headlines still
+# work (yfinance) — app/news/sentiment_analyzer.py degrades sentiment to
+# SentimentLabel.UNAVAILABLE on its own when torch/transformers aren't
+# installed, no code change needed. See requirements.txt for the full set.
+
+fastapi>=0.115
+uvicorn[standard]>=0.32
+pydantic>=2.9
+pydantic-settings>=2.6
+sqlalchemy>=2.0
+numpy>=1.26
+pandas>=2.2
+yfinance>=0.2.40
+websockets>=13.0
+python-dotenv>=1.0
+httpx>=0.27

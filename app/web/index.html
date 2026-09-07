@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>AlphaScope — Piyasa Tarayıcı</title>
+<link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">
+    <span class="brand-mark">A</span>
+    <div>
+      <h1>AlphaScope</h1>
+      <p class="subtitle">Gerçek Zamanlı Piyasa Tarayıcı</p>
+    </div>
+  </div>
+  <div class="status" id="baglanti-durumu">
+    <span class="dot"></span>
+    <span>Bağlanıyor...</span>
+  </div>
+</header>
+
+<div class="disclaimer-banner">
+  ⚠️ <strong>Bu sistemle gerçek para ile işlem yapılmaz.</strong>
+  Yalnızca kağıt üzerinde (paper trading) simülasyon ve analiz amaçlıdır. Hiçbir sinyal yatırım tavsiyesi değildir.
+</div>
+
+<nav class="market-tabs" id="pazar-sekmeleri">
+  <!-- JS ile doldurulur -->
+</nav>
+<div class="market-note" id="pazar-notu" hidden></div>
+
+<main class="layout">
+  <section class="panel scanner-panel">
+    <div class="panel-header">
+      <h2>Tarayıcı Sonuçları</h2>
+      <div class="filters">
+        <label>
+          Min. Skor
+          <input type="range" id="min-skor" min="0" max="100" value="0" />
+          <span id="min-skor-deger">0</span>
+        </label>
+        <label>
+          Sinyal
+          <select id="sinyal-filtre">
+            <option value="">Hepsi</option>
+            <option value="STRONG_BUY_SETUP">Güçlü Alım Fırsatı</option>
+            <option value="BUY_SETUP">Alım Fırsatı</option>
+            <option value="WATCH">İzlemede</option>
+            <option value="NEUTRAL">Nötr</option>
+            <option value="AVOID">Kaçının</option>
+          </select>
+        </label>
+      </div>
+    </div>
+    <table class="scanner-table">
+      <thead>
+        <tr>
+          <th>Sembol</th>
+          <th>Fiyat</th>
+          <th>Sinyal</th>
+          <th>Skor</th>
+          <th>Risk</th>
+        </tr>
+      </thead>
+      <tbody id="tarayici-govde">
+        <tr><td colspan="5" class="empty-row">Veri bekleniyor...</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section class="panel detail-panel" id="detay-panel">
+    <div class="panel-header">
+      <h2>Sinyal Detayı</h2>
+    </div>
+    <div id="detay-icerik" class="detail-empty">
+      Detayları görmek için soldaki tablodan bir sembol seçin.
+    </div>
+  </section>
+
+  <section class="panel portfolio-panel">
+    <div class="panel-header">
+      <h2>Kağıt Portföy</h2>
+    </div>
+    <div class="portfolio-summary" id="portfoy-ozet">
+      <div class="stat"><span class="stat-label">Nakit</span><span class="stat-value" id="pf-nakit">-</span></div>
+      <div class="stat"><span class="stat-label">Toplam Değer</span><span class="stat-value" id="pf-deger">-</span></div>
+      <div class="stat"><span class="stat-label">Gerçekleşen K/Z</span><span class="stat-value" id="pf-gerceklesen">-</span></div>
+      <div class="stat"><span class="stat-label">Gerçekleşmeyen K/Z</span><span class="stat-value" id="pf-gerceklesmeyen">-</span></div>
+    </div>
+    <table class="portfolio-table">
+      <thead>
+        <tr>
+          <th>Sembol</th>
+          <th>Adet</th>
+          <th>Ort. Maliyet</th>
+          <th>Güncel Fiyat</th>
+          <th>K/Z</th>
+        </tr>
+      </thead>
+      <tbody id="pozisyon-govde">
+        <tr><td colspan="5" class="empty-row">Açık pozisyon yok.</td></tr>
+      </tbody>
+    </table>
+  </section>
+</main>
+
+<footer class="footer">
+  AlphaScope — karar destek sistemi. API dokümantasyonu: <a href="/docs">/docs</a>
+</footer>
+
+<script src="/app.js"></script>
+</body>
+</html>
