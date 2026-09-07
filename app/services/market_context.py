@@ -10,6 +10,7 @@ from dataclasses import dataclass
 
 from app.autotrader.autotrader_service import AutoTraderService
 from app.fundamentals.fundamentals_service import FundamentalsService
+from app.macro.macro_service import MacroService
 from app.news.news_service import NewsService
 from app.scanner.universe import Universe
 from app.services.market_service import MarketService
@@ -27,4 +28,5 @@ class MarketContext:
     news_service: NewsService | None = None
     autotrader_service: AutoTraderService | None = None
     fundamentals_service: FundamentalsService | None = None
+    macro_service: MacroService | None = None
     note: str | None = None

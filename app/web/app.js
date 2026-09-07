@@ -109,6 +109,32 @@ function pazarDegistir(anahtar) {
   tarayiciYenile();
   portfoyYenile();
   simulasyonYenile();
+  makroYenile();
+}
+
+async function makroYenile() {
+  if (!aktifPazar) return;
+  const serit = document.getElementById("makro-serit");
+  try {
+    const gostergeler = await veriCek(`/api/${aktifPazar}/macro`);
+    if (!gostergeler.length) {
+      serit.hidden = true;
+      return;
+    }
+    serit.innerHTML = gostergeler.map((g) => {
+      const degisimSinif = (g.change_pct ?? 0) >= 0 ? "pnl-pos" : "pnl-neg";
+      const degisimMetin = g.change_pct !== null ? `${g.change_pct >= 0 ? "+" : ""}${paraFormat(g.change_pct)}%` : "";
+      return `
+        <div class="macro-item" title="${g.description}">
+          <span class="macro-label">${g.label}:</span>
+          <span class="macro-price">${paraFormat(g.price)}</span>
+          <span class="macro-change ${degisimSinif}">${degisimMetin}</span>
+        </div>`;
+    }).join("");
+    serit.hidden = false;
+  } catch (err) {
+    serit.hidden = true;
+  }
 }
 
 async function tarayiciYenile() {
@@ -597,12 +623,14 @@ async function baslat() {
   tarayiciYenile();
   portfoyYenile();
   simulasyonYenile();
+  makroYenile();
 }
 
 baslat();
 setInterval(tarayiciYenile, 5000);
 setInterval(portfoyYenile, 5000);
 setInterval(simulasyonYenile, 5000);
+setInterval(makroYenile, 60000);
 setInterval(() => {
   if (secilenSembol) sembolSec(secilenSembol);
 }, 5000);

@@ -89,6 +89,10 @@ class Settings(BaseSettings):
         default=21_600.0, validation_alias="FUNDAMENTALS_POLL_INTERVAL_SECONDS"
     )
 
+    macro_poll_interval_seconds: float = Field(
+        default=300.0, validation_alias="MACRO_POLL_INTERVAL_SECONDS"
+    )
+
     @field_validator("live_trading_enabled")
     @classmethod
     def _live_trading_must_stay_disabled(cls, value: bool) -> bool:

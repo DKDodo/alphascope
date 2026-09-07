@@ -17,6 +17,7 @@ from fastapi.staticfiles import StaticFiles
 from app.api.routes import (
     fundamentals,
     health,
+    macro,
     market,
     markets,
     news,
@@ -32,6 +33,7 @@ from app.core.events import AsyncEventBus
 from app.core.exceptions import ProviderNotConfiguredError, RiskCalculationError
 from app.core.logging import get_logger, setup_logging
 from app.fundamentals.fundamentals_service import FundamentalsService
+from app.macro.macro_service import MacroService
 from app.market_data.base import BaseMarketDataProvider
 from app.market_data.models import MarketEvent
 from app.market_data.providers.mock_provider import MockProvider
@@ -76,6 +78,7 @@ def _build_context(
     starting_cash: float,
     db: Database,
     news_ticker_suffix: str = "",
+    macro_indicators: list[tuple[str, str, str]] | None = None,
     note: str | None = None,
 ) -> MarketContext:
     event_bus: AsyncEventBus[MarketEvent] = AsyncEventBus()
@@ -116,6 +119,13 @@ def _build_context(
         poll_interval_seconds=settings.fundamentals_poll_interval_seconds,
     )
 
+    macro_service = None
+    if macro_indicators:
+        macro_service = MacroService(
+            indicators=macro_indicators,
+            poll_interval_seconds=settings.macro_poll_interval_seconds,
+        )
+
     return MarketContext(
         key=key,
         label=label,
@@ -126,6 +136,7 @@ def _build_context(
         news_service=news_service,
         autotrader_service=autotrader_service,
         fundamentals_service=fundamentals_service,
+        macro_service=macro_service,
         note=note,
     )
 
@@ -160,6 +171,10 @@ async def lifespan(app: FastAPI):
         starting_cash=settings.initial_paper_cash,
         db=db,
         news_ticker_suffix="",
+        macro_indicators=[
+            ("^GSPC", "S&P 500", "ABD hisse piyasasının genel yönü"),
+            ("^VIX", "VIX (Volatilite Endeksi)", "Piyasa risk iştahı — yüksek VIX daha temkinli olun demektir"),
+        ],
     )
 
     if settings.bist_enabled:
@@ -178,6 +193,10 @@ async def lifespan(app: FastAPI):
             starting_cash=settings.bist_initial_paper_cash,
             db=db,
             news_ticker_suffix=".IS",
+            macro_indicators=[
+                ("USDTRY=X", "USD/TRY", "Dolar/TL kuru — TL değer kaybı BIST'teki TL bazlı kazancı eritebilir"),
+                ("XU100.IS", "BIST 100", "Genel BIST piyasasının yönü"),
+            ],
             note=(
                 "Yahoo Finance verisi kullanılıyor; fiyatlar yaklaşık 15-20 dakika "
                 "gecikmeli olabilir. Gerçek zamanlı emir kararları için aracı "
@@ -196,12 +215,16 @@ async def lifespan(app: FastAPI):
             await ctx.autotrader_service.start()
         if ctx.fundamentals_service is not None:
             await ctx.fundamentals_service.start()
+        if ctx.macro_service is not None:
+            await ctx.macro_service.start()
 
     try:
         yield
     finally:
         logger.info("shutting down alphascope")
         for ctx in contexts.values():
+            if ctx.macro_service is not None:
+                await ctx.macro_service.stop()
             if ctx.fundamentals_service is not None:
                 await ctx.fundamentals_service.stop()
             if ctx.autotrader_service is not None:
@@ -243,6 +266,7 @@ def create_app() -> FastAPI:
     app.include_router(signals.router)
     app.include_router(news.router)
     app.include_router(fundamentals.router)
+    app.include_router(macro.router)
     app.include_router(simulation.router)
     app.include_router(portfolio.router)
     app.include_router(risk.router)

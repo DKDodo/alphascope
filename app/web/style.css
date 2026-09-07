@@ -106,6 +106,21 @@ body {
   font-size: 13px;
 }
 
+.macro-strip {
+  display: flex;
+  gap: 20px;
+  flex-wrap: wrap;
+  padding: 8px 24px;
+  background: #0e141c;
+  border-bottom: 1px solid var(--panel-border);
+  font-size: 12px;
+}
+.macro-item { display: flex; align-items: baseline; gap: 6px; }
+.macro-item .macro-label { color: var(--muted); }
+.macro-item .macro-price { font-weight: 700; }
+.macro-item .macro-change.pnl-pos { color: var(--green); }
+.macro-item .macro-change.pnl-neg { color: var(--red); }
+
 .layout {
   display: grid;
   grid-template-columns: 1.4fr 1fr;
