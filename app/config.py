@@ -51,9 +51,14 @@ class Settings(BaseSettings):
     bist_enabled: bool = Field(default=True, validation_alias="BIST_ENABLED")
     bist_symbols: str = Field(
         default=(
-            "AKBNK,ARCLK,ASELS,BIMAS,DOHOL,EKGYO,ENKAI,EREGL,FROTO,GARAN,"
-            "GUBRF,HALKB,ISCTR,KCHOL,KRDMD,MGROS,ODAS,OYAKC,PETKM,PGSUS,"
-            "SAHOL,SASA,SISE,TAVHL,TCELL,THYAO,TOASO,TUPRS,VAKBN,ULKER"
+            # Verified against the live BIST 30 index composition on
+            # 2026-09-07 (cross-checked via TradingView + Midas). Index
+            # membership is reviewed quarterly by Borsa İstanbul — refresh
+            # this list periodically, or override via .env, so it doesn't
+            # silently drift from the real index over time.
+            "AEFES,AKBNK,ASELS,ASTOR,BIMAS,DSTKF,EKGYO,ENKAI,EREGL,FROTO,"
+            "GARAN,GUBRF,ISCTR,KCHOL,KRDMD,MGROS,PETKM,PGSUS,SAHOL,SASA,"
+            "SISE,TAVHL,TCELL,THYAO,TOASO,TRALT,TTKOM,TUPRS,VAKBN,YKBNK"
         ),
         validation_alias="BIST_SYMBOLS",
     )
