@@ -226,6 +226,7 @@ function renderDetay(detay) {
       <span class="sym">${detay.symbol}</span>
       <span class="price">${paraBirimli(detay.price)}</span>
     </div>
+    <h3 style="font-size:13px;color:var(--accent);margin:0 0 6px;">⚡ Kısa Vadeli Teknik Sinyal</h3>
     <div class="detail-score">
       Toplam Fırsat Skoru: <strong>${detay.score}/100</strong> —
       <span class="badge badge-${detay.signal}">${SINYAL_ETIKET[detay.signal] || detay.signal}</span>
@@ -236,6 +237,8 @@ function renderDetay(detay) {
     <h3 style="font-size:13px;color:var(--muted);margin:14px 0 6px;">Risk Analizi (ATR bazlı, örnek senaryo — satış tabanları: Zarar Kes / Kâr Al)</h3>
     ${riskHtml || '<p class="detail-empty">Risk analizi için yeterli veri yok.</p>'}
     ${buyZoneHtml}
+    <h3 style="font-size:13px;color:var(--accent);margin:18px 0 6px;border-top:1px solid var(--panel-border);padding-top:14px;">📈 Uzun Vadeli Görünüm (Temel Analiz)</h3>
+    <div id="uzun-vade-icerik"><p class="detail-empty">Yükleniyor...</p></div>
     <h3 style="font-size:13px;color:var(--muted);margin:14px 0 6px;">📰 Son Haberler ve Duyarlılık</h3>
     <div id="haber-icerik"><p class="detail-empty">Yükleniyor...</p></div>
     <div class="calc-form">
@@ -256,6 +259,7 @@ function renderDetay(detay) {
 
   document.getElementById("hesapla-btn").addEventListener("click", pozisyonHesapla);
   haberleriYukle(detay.symbol);
+  uzunVadeYukle(detay.symbol);
 }
 
 const SENTIMENT_ETIKET = {
@@ -264,6 +268,83 @@ const SENTIMENT_ETIKET = {
   NEUTRAL: "Nötr",
   UNAVAILABLE: "Değerlendirilemedi",
 };
+
+const OUTLOOK_ETIKET = {
+  FAVORABLE: "Olumlu",
+  NEUTRAL: "Nötr",
+  UNFAVORABLE: "Olumsuz",
+  INSUFFICIENT_DATA: "Yetersiz Veri",
+};
+const OUTLOOK_BADGE_SINIF = {
+  FAVORABLE: "STRONG_BUY_SETUP",
+  NEUTRAL: "NEUTRAL",
+  UNFAVORABLE: "AVOID",
+  INSUFFICIENT_DATA: "NEUTRAL",
+};
+const TEMEL_ALAN_ETIKET = {
+  trailing_pe: "F/K Oranı (Trailing)",
+  forward_pe: "F/K Oranı (Forward)",
+  profit_margin_pct: "Net Kâr Marjı",
+  revenue_growth_pct: "Gelir Büyümesi (Yıllık)",
+  return_on_equity_pct: "Özkaynak Kârlılığı (ROE)",
+  debt_to_equity: "Borç/Özkaynak Oranı",
+  analyst_target_price: "Analist Ortalama Hedef Fiyat",
+};
+
+async function uzunVadeYukle(sembol) {
+  const kutu = document.getElementById("uzun-vade-icerik");
+  if (!kutu) return;
+  try {
+    const outlook = await veriCek(`/api/${aktifPazar}/fundamentals/${sembol}`);
+    if (secilenSembol !== sembol) return;
+    renderUzunVade(outlook);
+  } catch (err) {
+    kutu.innerHTML = '<p class="detail-empty">Temel analiz verisi yüklenemedi (özellik kapalı olabilir).</p>';
+  }
+}
+
+function renderUzunVade(outlook) {
+  const kutu = document.getElementById("uzun-vade-icerik");
+  const f = outlook.fundamentals;
+
+  if (outlook.label === "INSUFFICIENT_DATA" || !f) {
+    kutu.innerHTML = '<p class="detail-empty">Bu sembol için henüz yeterli temel veri toplanmadı (birkaç saat içinde güncellenir).</p>';
+    return;
+  }
+
+  const nedenlerHtml = outlook.reasons.length
+    ? `<ul class="reasons-list">${outlook.reasons
+        .map((n) => `<li class="${n.positive ? "reason-pos" : "reason-neg"}"><span class="reason-mark">${n.positive ? "▲" : "▼"}</span> ${n.text}</li>`)
+        .join("")}</ul>`
+    : '<p class="detail-empty">Belirgin bir gerekçe bulunamadı.</p>';
+
+  const veriAlanlari = ["trailing_pe", "forward_pe", "profit_margin_pct", "revenue_growth_pct", "return_on_equity_pct", "debt_to_equity", "analyst_target_price"]
+    .filter((alan) => f[alan] !== null && f[alan] !== undefined);
+
+  const veriGridHtml = veriAlanlari.length
+    ? `<div class="risk-grid">${veriAlanlari.map((alan) => {
+        const deger = alan.endsWith("_pct") ? `%${paraFormat(f[alan])}` : (alan === "analyst_target_price" ? paraBirimli(f[alan]) : paraFormat(f[alan]));
+        return `<div class="cell"><span class="label">${TEMEL_ALAN_ETIKET[alan]}</span><span class="value">${deger}</span></div>`;
+      }).join("")}</div>`
+    : "";
+
+  const analistHtml = f.analyst_recommendation
+    ? `<p class="detail-empty" style="text-align:left;">Yahoo Finance analist konsensüsü: <strong>${f.analyst_recommendation}</strong></p>`
+    : "";
+
+  kutu.innerHTML = `
+    <div class="detail-score" style="margin-bottom:10px;">
+      Uzun Vadeli Görünüm Skoru: <strong>${outlook.score}/100</strong> —
+      <span class="badge badge-${OUTLOOK_BADGE_SINIF[outlook.label]}">${OUTLOOK_ETIKET[outlook.label] || outlook.label}</span>
+    </div>
+    ${f.long_name ? `<p class="detail-empty" style="text-align:left;">${f.long_name}${f.sector ? " — " + f.sector : ""}</p>` : ""}
+    ${veriGridHtml}
+    ${analistHtml}
+    <h3 style="font-size:12px;color:var(--muted);margin:12px 0 6px;">Gerekçeler</h3>
+    ${nedenlerHtml}
+    <p class="detail-empty" style="text-align:left;">${outlook.disclaimer}</p>
+  `;
+}
 
 async function haberleriYukle(sembol) {
   const kutu = document.getElementById("haber-icerik");

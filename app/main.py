@@ -14,12 +14,24 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from app.api.routes import health, market, markets, news, portfolio, risk, scanner, signals, simulation
+from app.api.routes import (
+    fundamentals,
+    health,
+    market,
+    markets,
+    news,
+    portfolio,
+    risk,
+    scanner,
+    signals,
+    simulation,
+)
 from app.autotrader.autotrader_service import AutoTraderService
 from app.config import Settings, get_settings
 from app.core.events import AsyncEventBus
 from app.core.exceptions import ProviderNotConfiguredError, RiskCalculationError
 from app.core.logging import get_logger, setup_logging
+from app.fundamentals.fundamentals_service import FundamentalsService
 from app.market_data.base import BaseMarketDataProvider
 from app.market_data.models import MarketEvent
 from app.market_data.providers.mock_provider import MockProvider
@@ -97,6 +109,13 @@ def _build_context(
         tick_interval_seconds=settings.autotrader_tick_interval_seconds,
     )
 
+    fundamentals_service = FundamentalsService(
+        symbols=universe.symbols,
+        scanner_engine=scanner_engine,
+        ticker_suffix=news_ticker_suffix,
+        poll_interval_seconds=settings.fundamentals_poll_interval_seconds,
+    )
+
     return MarketContext(
         key=key,
         label=label,
@@ -106,6 +125,7 @@ def _build_context(
         scanner_service=scanner_service,
         news_service=news_service,
         autotrader_service=autotrader_service,
+        fundamentals_service=fundamentals_service,
         note=note,
     )
 
@@ -174,12 +194,16 @@ async def lifespan(app: FastAPI):
             await ctx.news_service.start()
         if ctx.autotrader_service is not None:
             await ctx.autotrader_service.start()
+        if ctx.fundamentals_service is not None:
+            await ctx.fundamentals_service.start()
 
     try:
         yield
     finally:
         logger.info("shutting down alphascope")
         for ctx in contexts.values():
+            if ctx.fundamentals_service is not None:
+                await ctx.fundamentals_service.stop()
             if ctx.autotrader_service is not None:
                 await ctx.autotrader_service.stop()
             if ctx.news_service is not None:
@@ -218,6 +242,7 @@ def create_app() -> FastAPI:
     app.include_router(scanner.router)
     app.include_router(signals.router)
     app.include_router(news.router)
+    app.include_router(fundamentals.router)
     app.include_router(simulation.router)
     app.include_router(portfolio.router)
     app.include_router(risk.router)
