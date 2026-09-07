@@ -81,6 +81,10 @@ class Settings(BaseSettings):
         default=8, validation_alias="NEWS_MAX_ITEMS_PER_SYMBOL"
     )
 
+    autotrader_tick_interval_seconds: float = Field(
+        default=30.0, validation_alias="AUTOTRADER_TICK_INTERVAL_SECONDS"
+    )
+
     @field_validator("live_trading_enabled")
     @classmethod
     def _live_trading_must_stay_disabled(cls, value: bool) -> bool:

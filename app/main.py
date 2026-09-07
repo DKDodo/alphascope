@@ -14,7 +14,8 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from app.api.routes import health, market, markets, news, portfolio, risk, scanner, signals
+from app.api.routes import health, market, markets, news, portfolio, risk, scanner, signals, simulation
+from app.autotrader.autotrader_service import AutoTraderService
 from app.config import Settings, get_settings
 from app.core.events import AsyncEventBus
 from app.core.exceptions import ProviderNotConfiguredError, RiskCalculationError
@@ -32,6 +33,7 @@ from app.services.market_context import MarketContext
 from app.services.market_service import MarketService
 from app.services.scanner_service import ScannerService
 from app.signals.signal_engine import SignalEngine
+from app.storage.database import Database
 
 logger = get_logger(__name__)
 
@@ -60,6 +62,7 @@ def _build_context(
     provider: BaseMarketDataProvider,
     settings: Settings,
     starting_cash: float,
+    db: Database,
     news_ticker_suffix: str = "",
     note: str | None = None,
 ) -> MarketContext:
@@ -86,6 +89,14 @@ def _build_context(
             max_items_per_symbol=settings.news_max_items_per_symbol,
         )
 
+    autotrader_service = AutoTraderService(
+        session_factory=db.session_factory,
+        market=key,
+        currency_symbol=currency_symbol,
+        scanner_service=scanner_service,
+        tick_interval_seconds=settings.autotrader_tick_interval_seconds,
+    )
+
     return MarketContext(
         key=key,
         label=label,
@@ -94,6 +105,7 @@ def _build_context(
         market_service=market_service,
         scanner_service=scanner_service,
         news_service=news_service,
+        autotrader_service=autotrader_service,
         note=note,
     )
 
@@ -111,6 +123,10 @@ async def lifespan(app: FastAPI):
         settings.live_trading_enabled,
     )
 
+    db = Database(settings.database_url)
+    db.create_all()
+    app.state.db = db
+
     contexts: dict[str, MarketContext] = {}
 
     global_universe = Universe(exchange="MOCK")
@@ -122,6 +138,7 @@ async def lifespan(app: FastAPI):
         provider=_build_global_provider(settings),
         settings=settings,
         starting_cash=settings.initial_paper_cash,
+        db=db,
         news_ticker_suffix="",
     )
 
@@ -139,6 +156,7 @@ async def lifespan(app: FastAPI):
             ),
             settings=settings,
             starting_cash=settings.bist_initial_paper_cash,
+            db=db,
             news_ticker_suffix=".IS",
             note=(
                 "Yahoo Finance verisi kullanılıyor; fiyatlar yaklaşık 15-20 dakika "
@@ -154,12 +172,16 @@ async def lifespan(app: FastAPI):
         await ctx.scanner_service.start()
         if ctx.news_service is not None:
             await ctx.news_service.start()
+        if ctx.autotrader_service is not None:
+            await ctx.autotrader_service.start()
 
     try:
         yield
     finally:
         logger.info("shutting down alphascope")
         for ctx in contexts.values():
+            if ctx.autotrader_service is not None:
+                await ctx.autotrader_service.stop()
             if ctx.news_service is not None:
                 await ctx.news_service.stop()
             await ctx.scanner_service.stop()
@@ -196,6 +218,7 @@ def create_app() -> FastAPI:
     app.include_router(scanner.router)
     app.include_router(signals.router)
     app.include_router(news.router)
+    app.include_router(simulation.router)
     app.include_router(portfolio.router)
     app.include_router(risk.router)
 

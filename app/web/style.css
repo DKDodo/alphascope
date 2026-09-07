@@ -114,6 +114,7 @@ body {
 }
 
 .portfolio-panel { grid-column: 1 / -1; }
+.simulation-panel { grid-column: 1 / -1; }
 
 .panel {
   background: var(--panel);
@@ -262,6 +263,27 @@ tbody tr:hover { background: #16202c; cursor: pointer; }
 
 .pnl-pos { color: var(--green); }
 .pnl-neg { color: var(--red); }
+
+.sim-start-form { display: flex; align-items: flex-end; gap: 12px; flex-wrap: wrap; }
+.sim-start-form label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--muted); }
+.sim-start-form input {
+  background: #0e141c; border: 1px solid var(--panel-border); color: var(--text);
+  border-radius: 6px; padding: 7px 10px; font-size: 13px; width: 140px;
+}
+.sim-start-form button {
+  background: var(--accent); border: none; color: white; border-radius: 6px;
+  padding: 9px 16px; font-size: 13px; font-weight: 600; cursor: pointer;
+}
+.sim-start-form button:disabled { opacity: 0.5; cursor: default; }
+
+.sim-progress { margin-bottom: 4px; }
+.sim-progress-track { height: 6px; border-radius: 4px; background: #0e141c; overflow: hidden; margin-top: 6px; }
+.sim-progress-fill { height: 100%; background: var(--accent); border-radius: 4px; }
+
+.sim-badge-completed { background: rgba(61,139,253,0.15); color: var(--accent); }
+
+.sim-trades-table { margin-top: 14px; }
+.sim-trades-table h3 { font-size: 13px; color: var(--muted); margin: 0 0 8px; }
 
 .footer { text-align: center; color: var(--muted); font-size: 12px; padding: 20px; }
 .footer a { color: var(--accent); }

@@ -108,6 +108,7 @@ function pazarDegistir(anahtar) {
     '<div class="detail-empty">Detayları görmek için soldaki tablodan bir sembol seçin.</div>';
   tarayiciYenile();
   portfoyYenile();
+  simulasyonYenile();
 }
 
 async function tarayiciYenile() {
@@ -377,15 +378,150 @@ document.getElementById("min-skor").addEventListener("input", (e) => {
 document.getElementById("min-skor").addEventListener("change", tarayiciYenile);
 document.getElementById("sinyal-filtre").addEventListener("change", tarayiciYenile);
 
+function gunFormat(gun) {
+  if (gun === null || gun === undefined) return "-";
+  const saat = gun * 24;
+  if (saat < 1) return `${Math.round(saat * 60)} dakika`;
+  if (gun < 1) return `${saat.toFixed(1)} saat`;
+  return `${gun.toFixed(1)} gün`;
+}
+
+async function simulasyonYenile() {
+  if (!aktifPazar) return;
+  const kutu = document.getElementById("simulasyon-icerik");
+  try {
+    const sim = await veriCek(`/api/${aktifPazar}/simulation/status`);
+    renderSimulasyon(sim);
+  } catch (err) {
+    kutu.innerHTML = '<p class="detail-empty">Simülasyon özelliği bu piyasada kapalı.</p>';
+  }
+}
+
+function renderSimulasyon(sim) {
+  const kutu = document.getElementById("simulasyon-icerik");
+  const birim = sim.currency_symbol;
+
+  if (sim.status === "NOT_STARTED") {
+    kutu.innerHTML = `
+      <p class="detail-empty" style="text-align:left;">
+        Sistem, kendi kurallı sinyallerine göre (BUY_SETUP/STRONG_BUY_SETUP'ta alım, zarar-kes/kâr-al/KAÇININ'da satım)
+        belirlediğiniz süre boyunca otomatik olarak sanal alım-satım yapar ve sonunda bir kâr/zarar raporu sunar.
+      </p>
+      <div class="sim-start-form">
+        <label>Başlangıç Bakiyesi (${birim})
+          <input type="number" id="sim-bakiye" value="10000" min="100" step="100" />
+        </label>
+        <label>Süre (gün)
+          <input type="number" id="sim-gun" value="7" min="1" max="30" step="1" />
+        </label>
+        <button id="sim-baslat-btn">Simülasyonu Başlat</button>
+      </div>
+      <p class="detail-empty" style="text-align:left;">${sim.disclaimer}</p>`;
+    document.getElementById("sim-baslat-btn").addEventListener("click", simulasyonBaslat);
+    return;
+  }
+
+  const durumRozeti = sim.status === "RUNNING"
+    ? '<span class="badge badge-STRONG_BUY_SETUP">Çalışıyor</span>'
+    : '<span class="badge sim-badge-completed">Tamamlandı</span>';
+
+  const getiriSinif = (sim.total_return_pct ?? 0) >= 0 ? "pnl-pos" : "pnl-neg";
+  const ilerlemeYuzde = sim.status === "COMPLETED" ? 100
+    : Math.min(100, Math.max(0, 100 - (sim.days_remaining / ((sim.ends_at && sim.started_at)
+        ? (new Date(sim.ends_at) - new Date(sim.started_at)) / 86400000 : 7)) * 100));
+
+  const pozisyonSatirlari = sim.positions.length
+    ? sim.positions.map((p) => `
+        <tr>
+          <td><strong>${p.symbol}</strong></td>
+          <td>${paraFormat(p.quantity)}</td>
+          <td>${birim} ${paraFormat(p.average_price)}</td>
+          <td>${p.current_price !== null ? birim + " " + paraFormat(p.current_price) : "-"}</td>
+          <td class="${(p.unrealized_pnl ?? 0) >= 0 ? "pnl-pos" : "pnl-neg"}">${p.unrealized_pnl !== null ? birim + " " + paraFormat(p.unrealized_pnl) : "-"}</td>
+        </tr>`).join("")
+    : '<tr><td colspan="5" class="empty-row">Açık pozisyon yok.</td></tr>';
+
+  const islemSatirlari = sim.recent_trades.length
+    ? sim.recent_trades.map((t) => `
+        <tr>
+          <td>${new Date(t.timestamp).toLocaleString("tr-TR")}</td>
+          <td><strong>${t.symbol}</strong></td>
+          <td><span class="badge badge-${t.action === "BUY" ? "STRONG_BUY_SETUP" : "AVOID"}">${t.action === "BUY" ? "ALIM" : "SATIM"}</span></td>
+          <td>${birim} ${paraFormat(t.price)}</td>
+          <td>${paraFormat(t.quantity)}</td>
+          <td>${t.realized_pnl !== null ? `<span class="${t.realized_pnl >= 0 ? "pnl-pos" : "pnl-neg"}">${birim} ${paraFormat(t.realized_pnl)}</span>` : "-"}</td>
+          <td>${t.reason}</td>
+        </tr>`).join("")
+    : '<tr><td colspan="7" class="empty-row">Henüz işlem yok.</td></tr>';
+
+  kutu.innerHTML = `
+    <div class="detail-score" style="margin-bottom:10px;">
+      ${durumRozeti}
+      ${sim.status === "RUNNING" ? `— Kalan süre: <strong>${gunFormat(sim.days_remaining)}</strong>` : `— Tamamlandı: ${sim.completed_at ? new Date(sim.completed_at).toLocaleString("tr-TR") : ""}`}
+    </div>
+    ${sim.status === "RUNNING" ? `<div class="sim-progress"><div class="sim-progress-track"><div class="sim-progress-fill" style="width:${ilerlemeYuzde}%"></div></div></div>` : ""}
+    <div class="portfolio-summary">
+      <div class="stat"><span class="stat-label">Başlangıç</span><span class="stat-value">${birim} ${paraFormat(sim.initial_cash)}</span></div>
+      <div class="stat"><span class="stat-label">Güncel Toplam Değer</span><span class="stat-value">${birim} ${paraFormat(sim.equity)}</span></div>
+      <div class="stat"><span class="stat-label">Toplam Getiri</span><span class="stat-value ${getiriSinif}">%${paraFormat(sim.total_return_pct)}</span></div>
+      <div class="stat"><span class="stat-label">Gerçekleşen K/Z</span><span class="stat-value ${(sim.realized_pnl ?? 0) >= 0 ? "pnl-pos" : "pnl-neg"}">${birim} ${paraFormat(sim.realized_pnl)}</span></div>
+      <div class="stat"><span class="stat-label">İşlem Sayısı</span><span class="stat-value">${sim.trade_count}</span></div>
+    </div>
+    <table class="portfolio-table">
+      <thead><tr><th>Sembol</th><th>Adet</th><th>Ort. Maliyet</th><th>Güncel Fiyat</th><th>K/Z</th></tr></thead>
+      <tbody>${pozisyonSatirlari}</tbody>
+    </table>
+    <div class="sim-trades-table">
+      <h3>İşlem Geçmişi</h3>
+      <table class="portfolio-table">
+        <thead><tr><th>Zaman</th><th>Sembol</th><th>Yön</th><th>Fiyat</th><th>Adet</th><th>K/Z</th><th>Gerekçe</th></tr></thead>
+        <tbody>${islemSatirlari}</tbody>
+      </table>
+    </div>
+    ${sim.status === "COMPLETED" ? `
+      <div class="sim-start-form" style="margin-top:14px;">
+        <label>Yeni Başlangıç Bakiyesi (${birim})<input type="number" id="sim-bakiye" value="10000" min="100" step="100" /></label>
+        <label>Süre (gün)<input type="number" id="sim-gun" value="7" min="1" max="30" step="1" /></label>
+        <button id="sim-baslat-btn">Yeni Simülasyon Başlat</button>
+      </div>` : ""}
+    <p class="detail-empty" style="text-align:left;margin-top:10px;">${sim.disclaimer}</p>
+  `;
+
+  const baslatBtn = document.getElementById("sim-baslat-btn");
+  if (baslatBtn) baslatBtn.addEventListener("click", simulasyonBaslat);
+}
+
+async function simulasyonBaslat() {
+  const btn = document.getElementById("sim-baslat-btn");
+  const bakiye = parseFloat(document.getElementById("sim-bakiye").value);
+  const gun = parseFloat(document.getElementById("sim-gun").value);
+  btn.disabled = true;
+  btn.textContent = "Başlatılıyor...";
+  try {
+    await veriCek(`/api/${aktifPazar}/simulation/start`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ initial_cash: bakiye, duration_days: gun }),
+    });
+    await simulasyonYenile();
+  } catch (err) {
+    alert("Simülasyon başlatılamadı: " + err.message);
+    btn.disabled = false;
+    btn.textContent = "Simülasyonu Başlat";
+  }
+}
+
 async function baslat() {
   await pazarlariYukle();
   tarayiciYenile();
   portfoyYenile();
+  simulasyonYenile();
 }
 
 baslat();
 setInterval(tarayiciYenile, 5000);
 setInterval(portfoyYenile, 5000);
+setInterval(simulasyonYenile, 5000);
 setInterval(() => {
   if (secilenSembol) sembolSec(secilenSembol);
 }, 5000);
