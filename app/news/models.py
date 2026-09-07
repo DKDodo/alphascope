@@ -32,8 +32,9 @@ class SymbolNewsSummary(BaseModel):
     negative_count: int
     neutral_count: int
     overall: SentimentLabel
+    sentiment_method: str = "unavailable"  # "finbert" | "keyword" | "unavailable" — shown in the UI for transparency
     disclaimer: str = (
-        "Haber duyarlılığı, FinBERT adlı istatistiksel bir dil modelinin metin "
-        "sınıflandırmasıdır; gerçek olayların doğruluğunu teyit etmez ve "
-        "yatırım tavsiyesi değildir. Kaynak haberi mutlaka kendiniz okuyun."
+        "Haber duyarlılığı istatistiksel/kural tabanlı bir sınıflandırmadır; "
+        "gerçek olayların doğruluğunu teyit etmez ve yatırım tavsiyesi değildir. "
+        "Kaynak haberi mutlaka kendiniz okuyun."
     )

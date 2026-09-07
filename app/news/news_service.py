@@ -65,6 +65,7 @@ class NewsService:
         all_titles = [item.title for items in per_symbol_items for item in items]
         sentiments = await self._analyzer.classify(all_titles) if all_titles else []
 
+        method = self._analyzer.method if all_titles else "unknown"
         cursor = 0
         for symbol, items in zip(self._symbols, per_symbol_items):
             scored_items: list[NewsItem] = []
@@ -72,15 +73,18 @@ class NewsService:
                 label, score = sentiments[cursor]
                 cursor += 1
                 scored_items.append(item.model_copy(update={"sentiment": label, "sentiment_score": score}))
-            self._latest[symbol] = _summarize(symbol, scored_items)
+            self._latest[symbol] = _summarize(symbol, scored_items, method)
 
-        logger.info("news cycle complete: %d symbols, %d headlines", len(self._symbols), len(all_titles))
+        logger.info(
+            "news cycle complete: %d symbols, %d headlines (sentiment method: %s)",
+            len(self._symbols), len(all_titles), method,
+        )
 
     def get_news(self, symbol: str) -> SymbolNewsSummary | None:
         return self._latest.get(symbol.upper())
 
 
-def _summarize(symbol: str, items: list[NewsItem]) -> SymbolNewsSummary:
+def _summarize(symbol: str, items: list[NewsItem], method: str = "unavailable") -> SymbolNewsSummary:
     positive = sum(1 for i in items if i.sentiment == SentimentLabel.POSITIVE)
     negative = sum(1 for i in items if i.sentiment == SentimentLabel.NEGATIVE)
     neutral = sum(1 for i in items if i.sentiment == SentimentLabel.NEUTRAL)
@@ -101,4 +105,5 @@ def _summarize(symbol: str, items: list[NewsItem]) -> SymbolNewsSummary:
         negative_count=negative,
         neutral_count=neutral,
         overall=overall,
+        sentiment_method=method,
     )

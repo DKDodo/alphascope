@@ -384,13 +384,17 @@ async function haberleriYukle(sembol) {
       return;
     }
 
+    const yontemEtiket = ozet.sentiment_method === "finbert" ? "FinBERT (dil modeli)"
+      : ozet.sentiment_method === "keyword" ? "basit anahtar kelime analizi"
+      : "yöntem belirlenemedi";
     const ozetSatir = `
       <div class="news-summary">
         <span class="badge badge-${ozet.overall === "POSITIVE" ? "STRONG_BUY_SETUP" : ozet.overall === "NEGATIVE" ? "AVOID" : "NEUTRAL"}">
           Genel: ${SENTIMENT_ETIKET[ozet.overall] || ozet.overall}
         </span>
         <span class="news-counts">Olumlu ${ozet.positive_count} · Olumsuz ${ozet.negative_count} · Nötr ${ozet.neutral_count}</span>
-      </div>`;
+      </div>
+      <p class="detail-empty" style="text-align:left;font-size:11px;">Duyarlılık yöntemi: ${yontemEtiket}</p>`;
 
     const haberler = ozet.items
       .map((h) => {
