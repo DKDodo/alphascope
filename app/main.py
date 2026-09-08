@@ -51,6 +51,16 @@ from app.storage.database import Database
 
 logger = get_logger(__name__)
 
+# Shown in both markets' macro strips alongside their own market-specific
+# indicators (S&P 500/VIX for Global, BIST 100 for BIST) — these four are
+# general-reference, not tied to either market specifically.
+_COMMON_MACRO_INDICATORS: list[tuple[str, str, str]] = [
+    ("EURTRY=X", "Euro/TL", "Euro/TL kuru — genel referans"),
+    ("GC=F", "Altın (Ons, $)", "Ons altın fiyatı — güvenli liman varlığı, genel piyasa risk iştahının göstergesi"),
+    ("SI=F", "Gümüş (Ons, $)", "Ons gümüş fiyatı — emtia piyasası göstergesi"),
+    ("BTC-USD", "Bitcoin ($)", "Bitcoin/USD fiyatı — kripto piyasası risk iştahının göstergesi"),
+]
+
 
 def _build_global_provider(settings: Settings, symbols: list[str]) -> BaseMarketDataProvider:
     if settings.market_data_provider == "massive":
@@ -185,6 +195,8 @@ async def lifespan(app: FastAPI):
         macro_indicators=[
             ("^GSPC", "S&P 500", "ABD hisse piyasasının genel yönü"),
             ("^VIX", "VIX (Volatilite Endeksi)", "Piyasa risk iştahı — yüksek VIX daha temkinli olun demektir"),
+            ("USDTRY=X", "Dolar/TL", "Dolar/TL kuru — genel referans"),
+            *_COMMON_MACRO_INDICATORS,
         ],
         note=(
             "Yahoo Finance verisi kullanılıyor; fiyatlar yaklaşık 15-20 dakika "
@@ -212,6 +224,7 @@ async def lifespan(app: FastAPI):
             macro_indicators=[
                 ("USDTRY=X", "USD/TRY", "Dolar/TL kuru — TL değer kaybı BIST'teki TL bazlı kazancı eritebilir"),
                 ("XU100.IS", "BIST 100", "Genel BIST piyasasının yönü"),
+                *_COMMON_MACRO_INDICATORS,
             ],
             note=(
                 "Yahoo Finance verisi kullanılıyor; fiyatlar yaklaşık 15-20 dakika "
