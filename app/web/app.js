@@ -192,10 +192,25 @@ async function sembolSec(sembol) {
   }
 }
 
+const YETERLI_BAR_ESIGI = 250; // EMA200 için gereken tam pencere
+
 function renderDetay(detay) {
   const icerik = document.getElementById("detay-icerik");
   const kategoriler = detay.category_scores;
   const birim = aktifPazarBilgi().currency_symbol;
+
+  let veriUyarisiHtml = "";
+  const barSayisi = detay.bars_available ?? 0;
+  if (barSayisi < YETERLI_BAR_ESIGI) {
+    const yuzde = Math.min(100, Math.round((barSayisi / YETERLI_BAR_ESIGI) * 100));
+    veriUyarisiHtml = `
+      <div class="market-note" style="margin:0 0 12px;border-radius:8px;">
+        ℹ️ Veri birikimi devam ediyor: ${barSayisi}/${YETERLI_BAR_ESIGI} bar (%${yuzde}).
+        Trend gibi bazı kategoriler (özellikle EMA200) tam olgunlaşana kadar düşük/eksik
+        puanlanabilir — bu düşük skor "kötü hisse" anlamına gelmeyebilir, henüz yeterli
+        geçmiş veri olmadığı anlamına gelir.
+      </div>`;
+  }
 
   let kategoriHtml = "";
   for (const anahtar of ["trend", "momentum", "volume", "price_action", "risk_reward"]) {
@@ -253,6 +268,7 @@ function renderDetay(detay) {
       <span class="price">${paraBirimli(detay.price)}</span>
     </div>
     <h3 style="font-size:13px;color:var(--accent);margin:0 0 6px;">⚡ Kısa Vadeli Teknik Sinyal</h3>
+    ${veriUyarisiHtml}
     <div class="detail-score">
       Toplam Fırsat Skoru: <strong>${detay.score}/100</strong> —
       <span class="badge badge-${detay.signal}">${SINYAL_ETIKET[detay.signal] || detay.signal}</span>

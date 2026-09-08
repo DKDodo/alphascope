@@ -72,6 +72,7 @@ class SignalEngine:
             risk_analysis=risk_analysis,
             buy_zone_low=buy_zone_low,
             buy_zone_high=buy_zone_high,
+            bars_available=ind.bars_available,
         )
 
 

@@ -49,6 +49,11 @@ class SignalResult(BaseModel):
     # volatility/trend — not a guarantee the price will reach it.
     buy_zone_low: float | None = None
     buy_zone_high: float | None = None
+    # How many rolling bars the scanner has accumulated for this symbol.
+    # EMA200 needs 200, MACD needs ~35 — a low number here (and staying low
+    # over time) means the score is capped by missing data, not a real
+    # "avoid" read on the market.
+    bars_available: int = 0
     timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     disclaimer: str = (
         "Sadece karar destek amaçlıdır. Yatırım tavsiyesi değildir. "
