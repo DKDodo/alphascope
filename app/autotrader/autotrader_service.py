@@ -77,8 +77,8 @@ MAX_CONCURRENT_POSITIONS = 5
 MIN_TRADE_VALUE = 1.0  # skip a buy that would be smaller than this (dust)
 MAX_POSITIONS_PER_SECTOR = 2  # forces diversification even within the concurrent-position cap
 DIP_ENTRY_MIN_CONFIDENCE = DipConfidence.STRONG  # only the highest-confidence dips get a secondary entry
-_VIX_ELEVATED_THRESHOLD = 20.0  # -> halve new-position risk
-_VIX_HIGH_THRESHOLD = 30.0  # -> quarter new-position risk
+VIX_ELEVATED_THRESHOLD = 20.0  # -> halve new-position risk
+VIX_HIGH_THRESHOLD = 30.0  # -> quarter new-position risk
 # RISK_PER_TRADE_FRACTION * MAX_CONCURRENT_POSITIONS puts a ~10% theoretical
 # ceiling on simultaneous stop-outs -- this catches a genuinely bad streak
 # without tripping on ordinary day-to-day volatility.
@@ -421,9 +421,9 @@ class AutoTraderService:
         )
         if vix is None:
             return 1.0
-        if vix >= _VIX_HIGH_THRESHOLD:
+        if vix >= VIX_HIGH_THRESHOLD:
             return 0.25
-        if vix >= _VIX_ELEVATED_THRESHOLD:
+        if vix >= VIX_ELEVATED_THRESHOLD:
             return 0.5
         return 1.0
 

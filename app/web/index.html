@@ -132,6 +132,35 @@
       <p class="detail-empty">Yükleniyor...</p>
     </div>
   </section>
+
+  <section class="panel simulation-panel">
+    <div class="panel-header">
+      <h2>📉 Backtest (Geriye Dönük Test)</h2>
+    </div>
+    <div id="backtest-icerik">
+      <p class="detail-empty" style="text-align:left;">
+        Bugünkü kural setini (sinyal skoru, dip fırsatı, VIX bazlı risk, zarar tavanı, kısmi kâr alma,
+        işlem maliyeti) geçmiş günlük fiyat verisiyle geriye dönük çalıştırır — ileriye dönük sinyal
+        takibinin haftalar sürecek veri birikimini beklemeden "bu kurallar geçmişte kâr getirir miydi"
+        sorusuna dakikalar içinde bir tahmin verir.
+      </p>
+      <div class="sim-start-form">
+        <label>Süre
+          <select id="backtest-yil">
+            <option value="1">1 Yıl</option>
+            <option value="2">2 Yıl</option>
+            <option value="3" selected>3 Yıl</option>
+            <option value="5">5 Yıl</option>
+          </select>
+        </label>
+        <label>Başlangıç Bakiyesi
+          <input type="number" id="backtest-bakiye" value="10000" min="100" step="100" />
+        </label>
+        <button id="backtest-calistir-btn">Backtest Çalıştır</button>
+      </div>
+      <div id="backtest-sonuc"></div>
+    </div>
+  </section>
 </main>
 
 <footer class="footer">

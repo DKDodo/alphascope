@@ -16,6 +16,7 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.api.routes import (
+    backtest,
     fundamentals,
     health,
     macro,
@@ -427,6 +428,7 @@ def create_app() -> FastAPI:
     app.include_router(simulation.router)
     app.include_router(portfolio.router)
     app.include_router(risk.router)
+    app.include_router(backtest.router)
 
     web_dir = _web_dir()
     if web_dir.is_dir():

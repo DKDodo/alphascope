@@ -114,6 +114,7 @@ function pazarDegistir(anahtar) {
   simulasyonYenile();
   makroYenile();
   sinyalPerformansiYenile();
+  backtestSifirla();
 }
 
 async function makroYenile() {
@@ -896,6 +897,102 @@ function renderSinyalPerformansi(veri) {
       Geçmiş performans gelecekteki sonuçları garanti etmez. Bu bir yatırım tavsiyesi değildir.
     </p>`;
 }
+
+function equityEgrisiSvg(equityCurve) {
+  if (!equityCurve || equityCurve.length < 2) return "";
+  const genislik = 700, yukseklik = 160, kenar = 10;
+  const degerler = equityCurve.map((p) => p.equity);
+  const minDeger = Math.min(...degerler);
+  const maxDeger = Math.max(...degerler);
+  const aralik = maxDeger - minDeger || 1;
+  const noktalar = equityCurve.map((p, i) => {
+    const x = kenar + (i / (equityCurve.length - 1)) * (genislik - 2 * kenar);
+    const y = yukseklik - kenar - ((p.equity - minDeger) / aralik) * (yukseklik - 2 * kenar);
+    return `${x.toFixed(1)},${y.toFixed(1)}`;
+  }).join(" ");
+  const renk = degerler[degerler.length - 1] >= degerler[0] ? "var(--green)" : "var(--red)";
+  return `<svg viewBox="0 0 ${genislik} ${yukseklik}" style="width:100%;height:${yukseklik}px;margin:10px 0;">
+    <polyline points="${noktalar}" fill="none" stroke="${renk}" stroke-width="2" />
+  </svg>`;
+}
+
+function renderBacktestSonuc(sonuc) {
+  const kutu = document.getElementById("backtest-sonuc");
+  const birim = aktifPazarBilgi().currency_symbol;
+  const getiriSinif = sonuc.total_return_pct >= 0 ? "pnl-pos" : "pnl-neg";
+  const benchmarkSatiri = sonuc.benchmark_return_pct !== null && sonuc.benchmark_return_pct !== undefined
+    ? `<div class="stat"><span class="stat-label">${sonuc.benchmark_symbol} (Al-Tut)</span><span class="stat-value ${sonuc.benchmark_return_pct >= 0 ? "pnl-pos" : "pnl-neg"}">%${paraFormat(sonuc.benchmark_return_pct)}</span></div>`
+    : "";
+
+  const islemSatirlari = sonuc.trades.length
+    ? sonuc.trades.slice(-50).reverse().map((t) => `
+        <tr>
+          <td>${new Date(t.date).toLocaleDateString("tr-TR")}</td>
+          <td><strong>${t.symbol}</strong></td>
+          <td><span class="badge badge-${t.action === "BUY" ? "STRONG_BUY_SETUP" : "AVOID"}">${t.action === "BUY" ? "ALIM" : "SATIM"}</span></td>
+          <td>${birim} ${paraFormat(t.price)}</td>
+          <td>${paraFormat(t.quantity)}</td>
+          <td>${t.realized_pnl !== null ? `<span class="${t.realized_pnl >= 0 ? "pnl-pos" : "pnl-neg"}">${birim} ${paraFormat(t.realized_pnl)}</span>` : "-"}</td>
+          <td>${t.reason}</td>
+        </tr>`).join("")
+    : '<tr><td colspan="7" class="empty-row">İşlem yok.</td></tr>';
+
+  kutu.innerHTML = `
+    <div class="portfolio-summary" style="margin-top:14px;">
+      <div class="stat"><span class="stat-label">Toplam Getiri</span><span class="stat-value ${getiriSinif}">%${paraFormat(sonuc.total_return_pct)}</span></div>
+      ${benchmarkSatiri}
+      <div class="stat"><span class="stat-label">Kazanma Oranı</span><span class="stat-value">${sonuc.win_rate_pct !== null && sonuc.win_rate_pct !== undefined ? "%" + paraFormat(sonuc.win_rate_pct) : "-"}</span></div>
+      <div class="stat"><span class="stat-label">Maks. Düşüş</span><span class="stat-value pnl-neg">%${paraFormat(sonuc.max_drawdown_pct)}</span></div>
+      <div class="stat"><span class="stat-label">Sharpe Oranı</span><span class="stat-value">${sonuc.sharpe_ratio !== null && sonuc.sharpe_ratio !== undefined ? paraFormat(sonuc.sharpe_ratio) : "-"}</span></div>
+      <div class="stat"><span class="stat-label">İşlem Sayısı</span><span class="stat-value">${sonuc.trade_count}</span></div>
+    </div>
+    ${equityEgrisiSvg(sonuc.equity_curve)}
+    <p class="detail-empty" style="text-align:left;font-size:11px;">
+      ${sonuc.start_date ? new Date(sonuc.start_date).toLocaleDateString("tr-TR") : ""} — ${sonuc.end_date ? new Date(sonuc.end_date).toLocaleDateString("tr-TR") : ""}
+      · ${sonuc.symbols_included} sembol dahil${sonuc.symbols_skipped ? `, ${sonuc.symbols_skipped} sembol veri eksikliğinden atlandı` : ""}
+    </p>
+    <div class="sim-trades-table">
+      <h3>İşlem Geçmişi (son 50)</h3>
+      <table class="portfolio-table">
+        <thead><tr><th>Tarih</th><th>Sembol</th><th>Yön</th><th>Fiyat</th><th>Adet</th><th>K/Z</th><th>Gerekçe</th></tr></thead>
+        <tbody>${islemSatirlari}</tbody>
+      </table>
+    </div>
+    <p class="detail-empty" style="text-align:left;margin-top:10px;">${sonuc.disclaimer}</p>
+  `;
+}
+
+async function backtestCalistir() {
+  const btn = document.getElementById("backtest-calistir-btn");
+  const kutu = document.getElementById("backtest-sonuc");
+  const yil = parseInt(document.getElementById("backtest-yil").value, 10);
+  const bakiye = parseFloat(document.getElementById("backtest-bakiye").value) || 10000;
+
+  btn.disabled = true;
+  btn.textContent = "Çalışıyor... (birkaç saniye sürebilir)";
+  kutu.innerHTML = '<p class="detail-empty">Geçmiş veri indiriliyor ve kurallar geriye dönük çalıştırılıyor...</p>';
+
+  try {
+    const sonuc = await veriCek(`/api/${aktifPazar}/backtest/run`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ years: yil, initial_cash: bakiye }),
+    });
+    renderBacktestSonuc(sonuc);
+  } catch (err) {
+    kutu.innerHTML = `<p class="detail-empty" style="text-align:left;"><span class="pnl-neg">${err.message}</span></p>`;
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "Backtest Çalıştır";
+  }
+}
+
+function backtestSifirla() {
+  const kutu = document.getElementById("backtest-sonuc");
+  if (kutu) kutu.innerHTML = "";
+}
+
+document.getElementById("backtest-calistir-btn").addEventListener("click", backtestCalistir);
 
 async function baslat() {
   await pazarlariYukle();

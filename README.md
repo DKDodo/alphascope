@@ -250,11 +250,42 @@ iyi performans gösteriyor mu?" sorusuna cevap veremiyordu. Bunu çözmek için:
   ortalama getiriyi gösterir — ama **en az 3 örneği** olmayan kombinasyonlar
   hiç gösterilmez (tek bir gözlemi "istatistik" gibi sunmamak için).
 - Bu, backtesting değildir (geçmişe gitmez, sadece ileri doğru gerçek
-  veriyle birikir) — ama zaman içinde birikince, aynı altyapı gerçek bir
-  geçmişe-dönük backtesting için de temel oluşturabilir.
+  veriyle birikir) — bunun için bkz. "Backtest" bölümü aşağıda.
 - `GET /api/{market}/signal-performance` uç noktasından da okunabilir.
   **Geçmiş performans gelecekteki sonuçları garanti etmez; bu bir yatırım
   tavsiyesi değildir.**
+
+## Backtest (geriye dönük test)
+
+Sinyal performansı takibi (yukarıda) haftalar/aylar süren bir veri
+birikimi gerektiriyor — "bugünkü kural seti kâr getirir miydi?" sorusuna
+dakikalar içinde bir tahmin vermek için `app/backtest/` bugünkü canlı
+kod yolunu (`ScannerEngine`, `SignalEngine`, `RiskEngine`, `dip_detector`,
+`PaperPortfolio` — hepsi saf, DB'den habersiz) geçmiş **günlük** barlarla
+besleyip aynı giriş/çıkış kurallarını (sektör hariç — bkz. aşağı) replay
+eder. Dashboard'daki **Backtest** panelinden ("Backtest Çalıştır") 1/2/3/5
+yıllık bir dönem seçilip çalıştırılabilir; sonuçta toplam getiri, aynı
+dönemde piyasa endeksini (Global: S&P 500, BIST: BIST 100, Kripto: BTC)
+sadece alıp tutmanın getirisiyle karşılaştırma, kazanma oranı, ortalama
+kazanç/kayıp %, maksimum düşüş, basit Sharpe oranı ve bir equity eğrisi
+gösterilir.
+
+**Bilinçli sınırlamalar** (sonuçta da belirtilir):
+- yfinance'in dakikalık verisi ~7 gün geriye gidiyor, çok yıllık bir
+  backtest için tek seçenek **günlük** bar — EMA200 artık "200 dakika"
+  değil, klasik "200 gün" anlamına geliyor (canlı sistemden daha anlamlı
+  bir okuma), ama VWAP günlük barda o günün ortalama fiyatına dejenere olur.
+- Sektör çeşitlendirme ve Uzun Vadeli Görünüm filtreleri **backtest'te
+  yok** — geçmişe dönük nokta-zamanlı temel veri (3 yıl önceki F/K gibi)
+  ücretsiz olarak mevcut değil; bugünün verisini geçmişe uygulamak veri
+  sızıntısı olurdu, o yüzden hiç uygulanmıyor.
+- Günlük trend onayı backtest'te ayrıca hesaplanmıyor — zaten günlük bar
+  kullanıldığı için ana trend skoruyla aynı şeyi tekrar eder.
+- VIX bazlı risk küçültme, dip girişleri, zarar tavanı, kısmi kâr alma ve
+  işlem maliyeti ise tam sadakatle replay edilir.
+- `POST /api/{market}/backtest/run` — sonuçlar kalıcı değil, her çağrı
+  yeniden hesaplar. **Geçmiş performans gelecekteki sonuçları garanti
+  etmez; bu bir yatırım tavsiyesi değildir.**
 
 ## API endpoints
 
@@ -272,6 +303,7 @@ Tüm tarayıcı/sinyal/haber/portföy uç noktaları `{market}` parametresi alı
 - `GET /api/{market}/portfolio` — o piyasanın kağıt portföy durumu (pozisyonlar, canlı K/Z, işlem geçmişi).
 - `POST /api/{market}/portfolio/buy`, `POST /api/{market}/portfolio/sell` — manuel kağıt alım/satım (`{symbol, quantity}`; fiyat her zaman sunucu tarafında canlı sinyalden çözülür).
 - `GET /api/{market}/simulation/status`, `POST /api/{market}/simulation/start` — N günlük otomatik simülasyon.
+- `POST /api/{market}/backtest/run` — geriye dönük test (`{years, initial_cash}`), bkz. "Backtest" bölümü.
 - `POST /api/risk/position-size` — hesap bakiyesi/risk yüzdesi/giriş/stop'tan pozisyon büyüklüğü.
 
 Örnek: `GET /api/bist/scanner`, `GET /api/global/signals/AAPL`, `GET /api/bist/news/THYAO`.
@@ -344,6 +376,11 @@ See `.env.example`. Key settings:
   `ensure_columns()` is what lets these new SQLite columns land on a
   simulation that was already running before the upgrade, without losing
   its history — `create_all()` alone only creates brand-new tables.
+- `app/backtest/` — replays the live scoring/entry/exit rules against
+  historical daily bars (see "Backtest" above for what's faithfully
+  replayed vs. deliberately omitted). Reuses ScannerEngine/SignalEngine/
+  RiskEngine/PaperPortfolio directly rather than a separate
+  reimplementation, so it tests the actual rules.
 - `app/portfolio/` — virtual paper trading only. `PaperPortfolio` is a pure,
   DB-unaware buy()/sell() engine (same shape as `ScannerEngine`); persistence
   is bolted on separately via `portfolio_repository.py`
