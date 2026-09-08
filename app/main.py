@@ -41,6 +41,7 @@ from app.market_data.providers.yfinance_provider import YFinanceProvider
 from app.news.news_service import NewsService
 from app.portfolio.paper_portfolio import PaperPortfolio
 from app.risk.risk_engine import RiskEngine
+from app.scanner import bar_repository
 from app.scanner.scanner_engine import ScannerEngine
 from app.scanner.universe import Universe
 from app.services.market_context import MarketContext
@@ -89,6 +90,25 @@ def _build_global_provider(settings: Settings, symbols: list[str]) -> BaseMarket
     )
 
 
+def _seed_scanner_from_db(
+    scanner_engine: ScannerEngine, db: Database, market_key: str, symbols: list[str]
+) -> None:
+    """Warm-starts the scanner's rolling indicator window from bars persisted
+    on a previous run, so a restart (redeploy, desktop EXE relaunch) doesn't
+    reset EMA200/etc. back to zero — see app/scanner/bar_repository.py."""
+    total_bars = 0
+    for symbol in symbols:
+        bars = bar_repository.load_recent_bars(db.session_factory, market_key, symbol)
+        for bar in bars:
+            scanner_engine.seed_bar(symbol, bar.open, bar.high, bar.low, bar.close, bar.volume)
+        total_bars += len(bars)
+    if total_bars:
+        logger.info(
+            "seeded %s scanner with %d persisted bars across %d symbols",
+            market_key, total_bars, len(symbols),
+        )
+
+
 def _build_context(
     key: str,
     label: str,
@@ -104,6 +124,7 @@ def _build_context(
 ) -> MarketContext:
     event_bus: AsyncEventBus[MarketEvent] = AsyncEventBus()
     scanner_engine = ScannerEngine()
+    _seed_scanner_from_db(scanner_engine, db, key, universe.symbols)
     signal_engine = SignalEngine(risk_engine=RiskEngine())
     portfolio = PaperPortfolio(starting_cash=starting_cash)
 
@@ -114,6 +135,8 @@ def _build_context(
         signal_engine=signal_engine,
         portfolio=portfolio,
         scan_interval_seconds=settings.scanner_interval_seconds,
+        market_key=key,
+        session_factory=db.session_factory,
     )
 
     news_service = None

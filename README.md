@@ -129,7 +129,10 @@ Yahoo Finance (`yfinance` paketi, `YFinanceProvider`,
   için canlı piyasa saatlerinde biriken ~200 bar'a ihtiyaç duyar (bkz.
   `bars_available` alanı, sembol detayında gösterilir). Piyasa kapalıyken
   (örn. ABD borsası kapandığında Global için, ya da gece BIST için) yeni bar
-  gelmez — bu bir hata değildir, normaldir.
+  gelmez — bu bir hata değildir, normaldir. Bu birikim `app/scanner/db_models.py`
+  üzerinden veritabanına kalıcı olarak yazılır (`app/scanner/bar_repository.py`),
+  bu yüzden bir yeniden başlatma (redeploy, masaüstü EXE'nin kapatılıp
+  açılması) sonrasında **sıfırdan başlamaz** — kaldığı yerden devam eder.
 
 ## Haber duyarlılığı (news sentiment)
 

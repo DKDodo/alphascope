@@ -67,6 +67,14 @@ class ScannerEngine:
         state = self._states.setdefault(event.symbol, SymbolState())
         state.add_bar(event.open, event.high, event.low, event.close, event.volume or 0.0)
 
+    def seed_bar(
+        self, symbol: str, open_: float, high: float, low: float, close: float, volume: float
+    ) -> None:
+        """Same as on_event, but for warm-starting from persisted history at
+        startup rather than a live provider event — see bar_repository.py."""
+        state = self._states.setdefault(symbol, SymbolState())
+        state.add_bar(open_, high, low, close, volume)
+
     def has_data(self, symbol: str) -> bool:
         return symbol in self._states and len(self._states[symbol].closes) > 0
 

@@ -4,10 +4,13 @@ from __future__ import annotations
 
 import asyncio
 
+from sqlalchemy.orm import Session, sessionmaker
+
 from app.core.events import AsyncEventBus
 from app.core.logging import get_logger
-from app.market_data.models import MarketEvent
+from app.market_data.models import EventType, MarketEvent
 from app.portfolio.paper_portfolio import PaperPortfolio
+from app.scanner import bar_repository
 from app.scanner.scanner_engine import ScannerEngine
 from app.signals.models import SignalResult
 from app.signals.signal_engine import SignalEngine
@@ -23,12 +26,19 @@ class ScannerService:
         signal_engine: SignalEngine,
         portfolio: PaperPortfolio,
         scan_interval_seconds: float = 5.0,
+        market_key: str | None = None,
+        session_factory: sessionmaker[Session] | None = None,
     ) -> None:
         self._event_bus = event_bus
         self._scanner_engine = scanner_engine
         self._signal_engine = signal_engine
         self._portfolio = portfolio
         self._scan_interval = scan_interval_seconds
+        # Persists each new bar so the rolling indicator window survives a
+        # restart (see bar_repository.py / ScannerEngine.seed_bar). Optional:
+        # tests can construct a ScannerService without a database at all.
+        self._market_key = market_key
+        self._session_factory = session_factory
 
         self._latest_results: dict[str, SignalResult] = {}
         self._consumer_task: asyncio.Task | None = None
@@ -57,10 +67,31 @@ class ScannerService:
                 self._scanner_engine.on_event(event)
                 if event.price is not None:
                     self._portfolio.update_market_price(event.symbol, event.price)
+                await self._persist_bar(event)
             except Exception:  # noqa: BLE001 - one bad event must not stop ingestion
                 logger.exception("failed to process market event for %s", event.symbol)
             finally:
                 self._event_bus.task_done()
+
+    async def _persist_bar(self, event: MarketEvent) -> None:
+        if self._session_factory is None or self._market_key is None:
+            return
+        if event.event_type is not EventType.BAR:
+            return
+        if event.open is None or event.high is None or event.low is None or event.close is None:
+            return
+        await asyncio.to_thread(
+            bar_repository.save_bar,
+            self._session_factory,
+            self._market_key,
+            event.symbol,
+            event.timestamp,
+            event.open,
+            event.high,
+            event.low,
+            event.close,
+            event.volume or 0.0,
+        )
 
     async def _scan_loop(self) -> None:
         while not self._stopping:
