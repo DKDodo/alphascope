@@ -133,6 +133,11 @@ Yahoo Finance (`yfinance` paketi, `YFinanceProvider`,
   üzerinden veritabanına kalıcı olarak yazılır (`app/scanner/bar_repository.py`),
   bu yüzden bir yeniden başlatma (redeploy, masaüstü EXE'nin kapatılıp
   açılması) sonrasında **sıfırdan başlamaz** — kaldığı yerden devam eder.
+- **Veri tazeliği:** Her sinyal, kullanılan son bar'ın yaşını (`data_age_seconds`)
+  taşır. Sembol detayında, bu yaş ~30 dakikayı aşarsa bir uyarı gösterilir —
+  genellikle piyasanın kapalı olmasından kaynaklanır (gece, hafta sonu, tatil),
+  ama piyasa açıkken uzun süre böyle kalırsa veri akışında bir aksama olabileceğine
+  işaret eder — bkz. `app/signals/signal_engine.py`'deki `_compute_data_age`.
 
 ## Haber duyarlılığı (news sentiment)
 

@@ -1,6 +1,8 @@
 """Combines category scores into a 0-100 Opportunity Score and classifies it."""
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 from app.risk.risk_engine import RiskAnalysis, RiskEngine
 from app.scanner.scanner_engine import IndicatorSnapshot
 from app.signals import scoring
@@ -73,6 +75,7 @@ class SignalEngine:
             buy_zone_low=buy_zone_low,
             buy_zone_high=buy_zone_high,
             bars_available=ind.bars_available,
+            data_age_seconds=_compute_data_age(ind),
         )
 
 
@@ -93,3 +96,13 @@ def _fallback_risk_level(score: int):
     from app.risk.risk_engine import RiskLevel
 
     return RiskLevel.MEDIUM
+
+
+def _compute_data_age(ind: IndicatorSnapshot) -> float | None:
+    if ind.last_bar_time is None:
+        return None
+    bar_time = ind.last_bar_time
+    if bar_time.tzinfo is None:
+        bar_time = bar_time.replace(tzinfo=timezone.utc)
+    age = (datetime.now(timezone.utc) - bar_time).total_seconds()
+    return max(0.0, age)

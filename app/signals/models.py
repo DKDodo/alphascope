@@ -54,6 +54,11 @@ class SignalResult(BaseModel):
     # over time) means the score is capped by missing data, not a real
     # "avoid" read on the market.
     bars_available: int = 0
+    # Age of the most recent bar this score was computed from, in seconds.
+    # A large value means the underlying market data hasn't updated in a
+    # while — either the market is simply closed (normal) or the data feed
+    # has stalled (worth a second look) — see SignalEngine._compute_data_age.
+    data_age_seconds: float | None = None
     timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     disclaimer: str = (
         "Sadece karar destek amaçlıdır. Yatırım tavsiyesi değildir. "

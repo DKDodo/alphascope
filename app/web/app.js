@@ -216,6 +216,13 @@ async function detaySessizYenile() {
 }
 
 const YETERLI_BAR_ESIGI = 250; // EMA200 için gereken tam pencere
+const VERI_TAZELIK_ESIGI_SN = 30 * 60; // bu süreden uzun süredir yeni bar yoksa uyar
+
+function saniyeFormat(saniye) {
+  if (saniye < 3600) return `${Math.round(saniye / 60)} dakika`;
+  if (saniye < 86400) return `${(saniye / 3600).toFixed(1)} saat`;
+  return `${(saniye / 86400).toFixed(1)} gün`;
+}
 
 function renderDetay(detay, korumaliIcerik) {
   const icerik = document.getElementById("detay-icerik");
@@ -232,6 +239,18 @@ function renderDetay(detay, korumaliIcerik) {
         Trend gibi bazı kategoriler (özellikle EMA200) tam olgunlaşana kadar düşük/eksik
         puanlanabilir — bu düşük skor "kötü hisse" anlamına gelmeyebilir, henüz yeterli
         geçmiş veri olmadığı anlamına gelir.
+      </div>`;
+  }
+
+  let tazelikUyarisiHtml = "";
+  const veriYasi = detay.data_age_seconds;
+  if (veriYasi !== null && veriYasi !== undefined && veriYasi > VERI_TAZELIK_ESIGI_SN) {
+    tazelikUyarisiHtml = `
+      <div class="market-note" style="margin:0 0 12px;border-radius:8px;">
+        ⏱️ Bu skor ${saniyeFormat(veriYasi)} önceki veriye dayanıyor, güncel olmayabilir.
+        Bu genellikle piyasa kapalı olduğu için normaldir (gece, hafta sonu, tatil);
+        piyasa açıkken uzun süre böyle kalırsa veri akışında bir aksama olabilir —
+        gerçek zamanlı fiyatı aracı kurumunuzdan teyit edin.
       </div>`;
   }
 
@@ -291,6 +310,7 @@ function renderDetay(detay, korumaliIcerik) {
       <span class="price">${paraBirimli(detay.price)}</span>
     </div>
     <h3 style="font-size:13px;color:var(--accent);margin:0 0 6px;">⚡ Kısa Vadeli Teknik Sinyal</h3>
+    ${tazelikUyarisiHtml}
     ${veriUyarisiHtml}
     <div class="detail-score">
       Toplam Fırsat Skoru: <strong>${detay.score}/100</strong> —

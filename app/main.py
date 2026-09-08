@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import sys
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 from pathlib import Path
 
 from fastapi import FastAPI, Request
@@ -90,6 +91,14 @@ def _build_global_provider(settings: Settings, symbols: list[str]) -> BaseMarket
     )
 
 
+def _as_utc(dt: datetime) -> datetime:
+    """SQLite's DateTime column drops tzinfo on round-trip, so a timestamp
+    read back from persisted bars comes back naive — normalize to
+    timezone-aware UTC before it's compared against datetime.now(utc)
+    anywhere downstream (see SignalEngine's data-staleness check)."""
+    return dt if dt.tzinfo is not None else dt.replace(tzinfo=timezone.utc)
+
+
 def _seed_scanner_from_db(
     scanner_engine: ScannerEngine, db: Database, market_key: str, symbols: list[str]
 ) -> None:
@@ -100,7 +109,9 @@ def _seed_scanner_from_db(
     for symbol in symbols:
         bars = bar_repository.load_recent_bars(db.session_factory, market_key, symbol)
         for bar in bars:
-            scanner_engine.seed_bar(symbol, bar.open, bar.high, bar.low, bar.close, bar.volume)
+            scanner_engine.seed_bar(
+                symbol, bar.open, bar.high, bar.low, bar.close, bar.volume, _as_utc(bar.timestamp)
+            )
         total_bars += len(bars)
     if total_bars:
         logger.info(
