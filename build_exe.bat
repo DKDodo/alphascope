@@ -14,10 +14,12 @@ echo Installing PyInstaller...
 pip install pyinstaller >nul
 
 echo Building AlphaScope.exe (this can take several minutes)...
-pyinstaller --noconfirm --clean --onefile --name AlphaScope -d noarchive ^
+python -m PyInstaller --noconfirm --clean --onefile --name AlphaScope -d noarchive ^
     --collect-all uvicorn ^
     --collect-all yfinance ^
     --collect-all transformers ^
+    --collect-all webview ^
+    --collect-all clr_loader ^
     --copy-metadata torch --copy-metadata transformers --copy-metadata tokenizers ^
     --copy-metadata regex --copy-metadata requests --copy-metadata packaging ^
     --copy-metadata filelock --copy-metadata numpy --copy-metadata tqdm ^
