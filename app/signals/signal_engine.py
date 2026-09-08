@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from app.risk.risk_engine import RiskAnalysis, RiskEngine
 from app.scanner.scanner_engine import IndicatorSnapshot
 from app.signals import scoring
+from app.signals.dip_detector import detect_dip_opportunity
 from app.signals.models import CategoryScores, SignalResult, SignalType
 
 _THRESHOLDS: list[tuple[int, SignalType]] = [
@@ -76,6 +77,7 @@ class SignalEngine:
             buy_zone_high=buy_zone_high,
             bars_available=ind.bars_available,
             data_age_seconds=_compute_data_age(ind),
+            dip_opportunity=detect_dip_opportunity(ind),
         )
 
 

@@ -220,6 +220,14 @@ Her sinyal, sadece "kaç puan" değil **neden** o puanı aldığını gösterir:
   geri çekilme bölgesi (Bollinger orta bandı ile bir ATR altı arası). Bu bir
   garanti değil, mevcut volatiliteye göre hesaplanan istatistiksel bir
   referanstır.
+- `dip_opportunity` — trend-takip Fırsat Skoru'ndan **tamamen ayrı**, RSI aşırı
+  satım + alt Bollinger bandına yakınlık + hacim onayına dayalı bir tepki-alımı
+  (mean-reversion) okuması — `app/signals/dip_detector.py`. Kasıtlı olarak
+  ana skora karıştırılmaz: bir sembol trend kurallarına göre `AVOID` olurken
+  aynı anda burada bir dip adayı olarak işaretlenebilir; bu bir çelişki değil,
+  iki farklı stratejinin (trend takibi vs. tepki alımı) doğal olarak farklı
+  şeyler görmesidir. Güven seviyesi (`confidence`: `STRONG`/`MEDIUM`/`WEAK`)
+  hacim onayının gücüne göre belirlenir.
 
 ## API endpoints
 

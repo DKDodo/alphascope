@@ -19,9 +19,28 @@ class SignalType(str, Enum):
     AVOID = "AVOID"
 
 
+class DipConfidence(str, Enum):
+    STRONG = "STRONG"
+    MEDIUM = "MEDIUM"
+    WEAK = "WEAK"
+
+
 class Reason(BaseModel):
     text: str
     positive: bool  # True = score-supporting factor, False = a factor working against the signal
+
+
+class DipOpportunity(BaseModel):
+    """A separate, opt-in 'bought the dip' read — mean-reversion (oversold +
+    near support + volume), the opposite lens from the trend-following
+    Opportunity Score above. Deliberately never folded into that score: the
+    two can and do disagree (a stock can be a textbook AVOID by trend rules
+    while also sitting at an oversold support bounce candidate), and hiding
+    one inside the other would erase that distinction rather than surface it.
+    """
+
+    confidence: DipConfidence
+    reasons: list[Reason]
 
 
 class CategoryScores(BaseModel):
@@ -59,6 +78,9 @@ class SignalResult(BaseModel):
     # while — either the market is simply closed (normal) or the data feed
     # has stalled (worth a second look) — see SignalEngine._compute_data_age.
     data_age_seconds: float | None = None
+    # Separate mean-reversion read, independent of the trend-following score
+    # above — see DipOpportunity's docstring for why these aren't merged.
+    dip_opportunity: DipOpportunity | None = None
     timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     disclaimer: str = (
         "Sadece karar destek amaçlıdır. Yatırım tavsiyesi değildir. "

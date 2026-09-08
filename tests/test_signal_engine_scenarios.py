@@ -9,7 +9,7 @@ from app.indicators.momentum import MacdResult
 from app.indicators.volatility import BollingerBands
 from app.risk.risk_engine import RiskEngine
 from app.scanner.scanner_engine import IndicatorSnapshot
-from app.signals.models import SignalType
+from app.signals.models import DipConfidence, SignalType
 from app.signals.signal_engine import SignalEngine
 
 
@@ -82,6 +82,32 @@ def test_negative_trend_scenario_scores_low_and_all_reasons_unfavorable():
     assert result.signal == SignalType.AVOID
     assert len(result.reasons) > 0
     assert all(r.positive is False for r in result.reasons)
+    assert result.dip_opportunity is None  # price isn't near the lower band in this scenario
+
+
+def test_dip_opportunity_can_coexist_with_a_low_trend_score():
+    # Trend/momentum are still bearish (AVOID by trend rules), but price
+    # sits right at the lower Bollinger band with RSI oversold and some
+    # volume behind it -- a textbook mean-reversion dip candidate. The two
+    # reads deliberately disagree here, and that's the point: the trend
+    # Opportunity Score must not swallow or hide the separate dip read.
+    ind = _snapshot(
+        price=95.0,
+        ema9=95.0, ema20=100.0, ema50=105.0, ema200=110.0,
+        rsi14=22.0,
+        macd=MacdResult(macd_line=-1.0, signal_line=-0.5, histogram=-0.5),
+        momentum_roc=-4.0,
+        volume_ratio=1.6,
+        bollinger=BollingerBands(upper=105.0, middle=100.0, lower=95.0),
+        vwap=97.0,
+        atr14=3.0,
+    )
+    result = _engine().evaluate(ind)
+
+    assert result is not None
+    assert result.signal == SignalType.AVOID
+    assert result.dip_opportunity is not None
+    assert result.dip_opportunity.confidence == DipConfidence.MEDIUM
 
 
 def test_sideways_market_scenario_scores_mid_range():

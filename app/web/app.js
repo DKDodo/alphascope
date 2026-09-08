@@ -8,6 +8,9 @@ const SINYAL_ETIKET = {
 
 const RISK_ETIKET = { LOW: "Düşük", MEDIUM: "Orta", HIGH: "Yüksek" };
 
+const DIP_GUVEN_ETIKET = { STRONG: "Güçlü", MEDIUM: "Orta", WEAK: "Zayıf" };
+const DIP_GUVEN_BADGE_SINIF = { STRONG: "STRONG_BUY_SETUP", MEDIUM: "NEUTRAL", WEAK: "NEUTRAL" };
+
 const KATEGORI_ETIKET = {
   trend: "Trend",
   momentum: "Momentum",
@@ -304,6 +307,27 @@ function renderDetay(detay, korumaliIcerik) {
       </div>`;
   }
 
+  let dipHtml = "";
+  if (detay.dip_opportunity) {
+    const dip = detay.dip_opportunity;
+    const dipNedenler = dip.reasons
+      .map(
+        (n) =>
+          `<li class="${n.positive ? "reason-pos" : "reason-neg"}"><span class="reason-mark">${n.positive ? "▲" : "▼"}</span> ${n.text}</li>`
+      )
+      .join("");
+    dipHtml = `
+      <div class="buy-zone-box" style="margin-top:10px;">
+        <span class="label">🔻 Dip Fırsatı Tespit Edildi
+          <span class="badge badge-${DIP_GUVEN_BADGE_SINIF[dip.confidence]}">${DIP_GUVEN_ETIKET[dip.confidence] || dip.confidence} güven</span>
+        </span>
+        <ul class="reasons-list" style="margin-top:6px;">${dipNedenler}</ul>
+        <p class="hint">Trend-takip Fırsat Skoru'ndan tamamen ayrı, "aşırı satım + destek bandı + hacim" temelli bir tepki-alımı okuması.
+          Bu, yukarıdaki Fırsat Skoru ile çelişebilir (bir hisse trend kurallarına göre Kaçının olurken aynı anda dip adayı olabilir) —
+          kasıtlı olarak birleştirilmez, garanti değildir.</p>
+      </div>`;
+  }
+
   icerik.innerHTML = `
     <div class="detail-symbol">
       <span class="sym">${detay.symbol}</span>
@@ -322,6 +346,7 @@ function renderDetay(detay, korumaliIcerik) {
     <h3 style="font-size:13px;color:var(--muted);margin:14px 0 6px;">Risk Analizi (ATR bazlı, örnek senaryo — satış tabanları: Zarar Kes / Kâr Al)</h3>
     ${riskHtml || '<p class="detail-empty">Risk analizi için yeterli veri yok.</p>'}
     ${buyZoneHtml}
+    ${dipHtml}
     <h3 style="font-size:13px;color:var(--accent);margin:18px 0 6px;border-top:1px solid var(--panel-border);padding-top:14px;">📈 Uzun Vadeli Görünüm (Temel Analiz)</h3>
     <div id="uzun-vade-icerik">${(korumaliIcerik && korumaliIcerik.uzunVade) || '<p class="detail-empty">Yükleniyor...</p>'}</div>
     <h3 style="font-size:13px;color:var(--muted);margin:14px 0 6px;">📰 Son Haberler ve Duyarlılık</h3>
