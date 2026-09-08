@@ -264,6 +264,7 @@ async def lifespan(app: FastAPI):
     db.ensure_columns("simulation_positions", {
         "take_profit_2": "FLOAT",
         "partial_exit_done": "INTEGER DEFAULT 0",
+        "avoid_streak": "INTEGER DEFAULT 0",
     })
     app.state.db = db
 

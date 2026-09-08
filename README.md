@@ -348,7 +348,15 @@ See `.env.example`. Key settings:
   gate (see below), not by the short-term Opportunity Score.
 - `app/autotrader/` — self-driving N-day paper trading simulation, persisted
   to SQLite (`app/autotrader/db_models.py`) so a run survives a restart.
-  Position sizing is risk-based (`RISK_PER_TRADE_FRACTION` of cash risked to
+  Entry uses `AUTOTRADER_ENTRY_SCORE_MIN`, AutoTrader's own score bar —
+  deliberately looser than, and independent from, the dashboard's
+  STRONG_BUY_SETUP/BUY_SETUP labels (`signal_engine.py`'s 75/85). A
+  backtest found the display's bar so strict AutoTrader sat in ~96% cash;
+  a calibration sweep (`app/backtest/`) against real Global (3y) + BIST
+  (2y) history picked 60. Exit on AVOID also no longer fires on a single
+  reading — it requires `AVOID_EXIT_STREAK_REQUIRED` (3, same sweep)
+  consecutive checks, since a lone reading was whipsawing positions out on
+  routine noise. Position sizing is risk-based (`RISK_PER_TRADE_FRACTION` of cash risked to
   the stop distance, capped by `MAX_POSITION_ALLOCATION_FRACTION`) rather
   than a flat percentage — a volatile/wide-stop symbol gets a smaller
   position than a calm one for the same dollar risk. The stop-loss trails up

@@ -5,6 +5,7 @@ from datetime import date, datetime, timedelta, timezone
 
 import pytest
 
+from app.autotrader.autotrader_service import AVOID_EXIT_STREAK_REQUIRED
 from app.backtest import backtest_engine
 from app.backtest.backtest_engine import (
     _OpenPosition,
@@ -17,6 +18,7 @@ from app.backtest.backtest_engine import (
     _sharpe_ratio,
     _should_take_partial_profit,
     _trade_stats,
+    _update_avoid_streak,
     _update_trailing_stop,
     run_backtest,
 )
@@ -26,9 +28,11 @@ from app.risk.risk_engine import RiskAnalysis, RiskLevel
 from app.signals.models import CategoryScores, SignalResult, SignalType
 
 
-def _signal(price: float, atr: float = 1.0, signal: SignalType = SignalType.NEUTRAL, symbol: str = "AAPL") -> SignalResult:
+def _signal(
+    price: float, atr: float = 1.0, signal: SignalType = SignalType.NEUTRAL, symbol: str = "AAPL", score: int = 90
+) -> SignalResult:
     return SignalResult(
-        symbol=symbol, price=price, score=50, signal=signal, reasons=[], risk_level=RiskLevel.MEDIUM,
+        symbol=symbol, price=price, score=score, signal=signal, reasons=[], risk_level=RiskLevel.MEDIUM,
         category_scores=CategoryScores(trend=10, momentum=10, volume=10, price_action=10, risk_reward=10),
         risk_analysis=RiskAnalysis(
             entry_price=price, stop_loss=price - 5, take_profit_1=price + 10, take_profit_2=price + 20,
@@ -94,11 +98,38 @@ def test_risk_multiplier_from_vix_thresholds():
     assert _risk_multiplier_from_vix(35.0) == 0.25
 
 
-def test_exit_reason_stop_loss_take_profit_and_avoid():
+def test_exit_reason_stop_loss_and_take_profit_are_instant():
     meta = _OpenPosition(stop_loss=95.0, take_profit=110.0, take_profit_2=None)
     assert _exit_reason(meta, 94.0, SignalType.NEUTRAL) == "Zarar-kes seviyesine ulaşıldı"
     assert _exit_reason(meta, 111.0, SignalType.NEUTRAL) == "Kâr-al seviyesine ulaşıldı"
-    assert _exit_reason(meta, 100.0, SignalType.AVOID) == "Sinyal KAÇININ'a döndü"
+    assert _exit_reason(meta, 100.0, SignalType.NEUTRAL) is None
+
+
+def test_avoid_streak_requires_persistence_before_exiting():
+    meta = _OpenPosition(stop_loss=95.0, take_profit=110.0, take_profit_2=None)
+
+    # A single noisy AVOID reading must not close the position by itself.
+    _update_avoid_streak(meta, SignalType.AVOID)
+    assert meta.avoid_streak == 1
+    assert _exit_reason(meta, 100.0, SignalType.AVOID) is None
+
+    # ...but a genuine reversal that persists does exit, once it reaches
+    # AVOID_EXIT_STREAK_REQUIRED consecutive checks.
+    for _ in range(AVOID_EXIT_STREAK_REQUIRED - 1):
+        _update_avoid_streak(meta, SignalType.AVOID)
+    assert meta.avoid_streak == AVOID_EXIT_STREAK_REQUIRED
+    assert _exit_reason(meta, 100.0, SignalType.AVOID) is not None
+
+
+def test_avoid_streak_resets_the_moment_the_signal_recovers():
+    meta = _OpenPosition(stop_loss=95.0, take_profit=110.0, take_profit_2=None)
+    for _ in range(AVOID_EXIT_STREAK_REQUIRED - 1):
+        _update_avoid_streak(meta, SignalType.AVOID)
+    assert meta.avoid_streak == AVOID_EXIT_STREAK_REQUIRED - 1
+
+    _update_avoid_streak(meta, SignalType.NEUTRAL)  # one non-AVOID reading resets the count
+
+    assert meta.avoid_streak == 0
     assert _exit_reason(meta, 100.0, SignalType.NEUTRAL) is None
 
 

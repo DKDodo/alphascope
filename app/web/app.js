@@ -697,8 +697,11 @@ function renderSimulasyon(sim) {
   if (sim.status === "NOT_STARTED") {
     kutu.innerHTML = `
       <p class="detail-empty" style="text-align:left;">
-        Sistem, kendi kurallı sinyallerine göre (BUY_SETUP/STRONG_BUY_SETUP'ta alım, zarar-kes/kâr-al/KAÇININ'da satım)
-        belirlediğiniz süre boyunca otomatik olarak sanal alım-satım yapar ve sonunda bir kâr/zarar raporu sunar.
+        Sistem, kendi kurallı sinyallerine göre (kendi giriş skoru eşiğini aşınca alım; zarar-kes/kâr-al'da veya
+        KAÇININ birkaç ardışık kontrolde ısrar edince satım) belirlediğiniz süre boyunca otomatik olarak sanal
+        alım-satım yapar ve sonunda bir kâr/zarar raporu sunar. AutoTrader'ın giriş eşiği, yukarıdaki Fırsat
+        Skoru etiketlerinden (Güçlü Alım Fırsatı vb.) bilinçli olarak ayrı ve daha gevşektir — backtest,
+        gösterge panelindeki sıkı eşiğin AutoTrader'ı neredeyse hep nakitte bıraktığını ortaya çıkardı.
       </p>
       <div class="sim-start-form">
         <label>Başlangıç Bakiyesi (${birim})

@@ -27,6 +27,8 @@ from datetime import datetime, timezone
 from statistics import mean, pstdev
 
 from app.autotrader.autotrader_service import (
+    AUTOTRADER_ENTRY_SCORE_MIN,
+    AVOID_EXIT_STREAK_REQUIRED,
     DIP_ENTRY_MIN_CONFIDENCE,
     MAX_CONCURRENT_POSITIONS,
     MAX_DRAWDOWN_FRACTION,
@@ -59,6 +61,7 @@ class _OpenPosition:
     take_profit: float | None
     take_profit_2: float | None
     partial_exit_done: bool = False
+    avoid_streak: int = 0
 
 
 def run_backtest(
@@ -156,6 +159,7 @@ def _process_exits(
             continue
         meta = open_meta[symbol]
         _update_trailing_stop(meta, result)
+        _update_avoid_streak(meta, result.signal)
 
         if _should_take_partial_profit(meta, result.price):
             quantity = _current_quantity(portfolio, symbol) * PARTIAL_EXIT_FRACTION
@@ -185,7 +189,7 @@ def _process_entries(
 
     trend_candidates = [
         r for r in all_results
-        if r.signal in (SignalType.STRONG_BUY_SETUP, SignalType.BUY_SETUP) and r.symbol not in open_symbols
+        if r.score >= AUTOTRADER_ENTRY_SCORE_MIN and r.symbol not in open_symbols
     ]
     trend_candidates.sort(key=lambda r: r.score, reverse=True)
     trend_symbols = {r.symbol for r in trend_candidates}
@@ -216,7 +220,7 @@ def _process_entries(
         reason = (
             f"Dip Fırsatı ({result.dip_opportunity.confidence.value} güven) — aşırı satım tepki alımı"
             if is_dip_entry
-            else f"Sinyal {result.signal.value} (skor {result.score})"
+            else f"AutoTrader giriş eşiği aşıldı (skor {result.score}, görüntülenen sinyal: {result.signal.value})"
         )
         portfolio.buy(result.symbol, quantity, result.price * (1 + TRANSACTION_COST_RATE))
         trades.append(BacktestTrade(
@@ -266,13 +270,20 @@ def _should_take_partial_profit(meta: _OpenPosition, price: float) -> bool:
     )
 
 
+def _update_avoid_streak(meta: _OpenPosition, signal: SignalType) -> None:
+    if signal == SignalType.AVOID:
+        meta.avoid_streak += 1
+    else:
+        meta.avoid_streak = 0
+
+
 def _exit_reason(meta: _OpenPosition, price: float, signal: SignalType) -> str | None:
     if meta.stop_loss is not None and price <= meta.stop_loss:
         return "Zarar-kes seviyesine ulaşıldı"
     if meta.take_profit is not None and price >= meta.take_profit:
         return "Kâr-al seviyesine ulaşıldı"
-    if signal == SignalType.AVOID:
-        return "Sinyal KAÇININ'a döndü"
+    if meta.avoid_streak >= AVOID_EXIT_STREAK_REQUIRED:
+        return f"Sinyal {AVOID_EXIT_STREAK_REQUIRED} ardışık kontrolde KAÇININ'da kaldı"
     return None
 
 

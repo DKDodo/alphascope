@@ -7,6 +7,7 @@ from sqlalchemy.orm import sessionmaker
 
 from app.autotrader.autotrader_service import (
     AutoTraderService,
+    AVOID_EXIT_STREAK_REQUIRED,
     MAX_CONCURRENT_POSITIONS,
     MAX_DRAWDOWN_FRACTION,
     TRANSACTION_COST_RATE,
@@ -168,7 +169,9 @@ def test_tick_sells_on_stop_loss_hit(session_factory, scanner):
     assert status.realized_pnl is not None and status.realized_pnl < 0
 
 
-def test_tick_sells_when_signal_drops_to_avoid(session_factory, scanner):
+def test_single_avoid_tick_does_not_sell(session_factory, scanner):
+    """A lone noisy AVOID reading must not whipsaw the position out --
+    see AVOID_EXIT_STREAK_REQUIRED."""
     svc = _service(session_factory, scanner)
     svc.start_run(initial_cash=10_000.0, duration_days=7.0)
     scanner.set_signal("AAPL", SignalType.STRONG_BUY_SETUP, price=100.0, stop_loss=90.0, take_profit_1=110.0)
@@ -177,9 +180,43 @@ def test_tick_sells_when_signal_drops_to_avoid(session_factory, scanner):
     scanner.set_signal("AAPL", SignalType.AVOID, price=101.0, stop_loss=90.0, take_profit_1=110.0)
     svc._tick_sync()
 
+    assert len(svc.get_status().positions) == 1
+
+
+def test_tick_sells_when_signal_drops_to_avoid_for_the_required_streak(session_factory, scanner):
+    svc = _service(session_factory, scanner)
+    svc.start_run(initial_cash=10_000.0, duration_days=7.0)
+    scanner.set_signal("AAPL", SignalType.STRONG_BUY_SETUP, price=100.0, stop_loss=90.0, take_profit_1=110.0)
+    svc._tick_sync()
+
+    scanner.set_signal("AAPL", SignalType.AVOID, price=101.0, stop_loss=90.0, take_profit_1=110.0)
+    for _ in range(AVOID_EXIT_STREAK_REQUIRED):
+        svc._tick_sync()
+
     status = svc.get_status()
     assert len(status.positions) == 0
     assert "KAÇININ" in status.recent_trades[0].reason
+
+
+def test_avoid_streak_resets_when_signal_recovers(session_factory, scanner):
+    svc = _service(session_factory, scanner)
+    svc.start_run(initial_cash=10_000.0, duration_days=7.0)
+    scanner.set_signal("AAPL", SignalType.STRONG_BUY_SETUP, price=100.0, stop_loss=90.0, take_profit_1=110.0)
+    svc._tick_sync()
+
+    for _ in range(AVOID_EXIT_STREAK_REQUIRED - 1):
+        scanner.set_signal("AAPL", SignalType.AVOID, price=101.0, stop_loss=90.0, take_profit_1=110.0)
+        svc._tick_sync()
+    assert len(svc.get_status().positions) == 1  # not yet at the streak requirement
+
+    scanner.set_signal("AAPL", SignalType.NEUTRAL, price=101.0, stop_loss=90.0, take_profit_1=110.0)
+    svc._tick_sync()  # recovers -- resets the streak
+
+    for _ in range(AVOID_EXIT_STREAK_REQUIRED - 1):
+        scanner.set_signal("AAPL", SignalType.AVOID, price=101.0, stop_loss=90.0, take_profit_1=110.0)
+        svc._tick_sync()
+
+    assert len(svc.get_status().positions) == 1  # streak restarted, still hasn't reached the requirement again
 
 
 def test_max_concurrent_positions_respected(session_factory, scanner):
@@ -357,7 +394,7 @@ def test_dip_opportunity_triggers_entry_without_a_trend_buy_setup(session_factor
     svc = _service(session_factory, scanner)
     svc.start_run(initial_cash=10_000.0, duration_days=7.0)
     scanner.set_signal(
-        "AAPL", SignalType.NEUTRAL, price=100.0, stop_loss=95.0, score=50,
+        "AAPL", SignalType.NEUTRAL, price=100.0, stop_loss=95.0, score=30,  # comfortably below any reasonable AUTOTRADER_ENTRY_SCORE_MIN
         dip_confidence=DipConfidence.STRONG,
     )
 
@@ -373,7 +410,7 @@ def test_medium_dip_confidence_does_not_trigger_an_entry(session_factory, scanne
     svc = _service(session_factory, scanner)
     svc.start_run(initial_cash=10_000.0, duration_days=7.0)
     scanner.set_signal(
-        "AAPL", SignalType.NEUTRAL, price=100.0, stop_loss=95.0, score=50,
+        "AAPL", SignalType.NEUTRAL, price=100.0, stop_loss=95.0, score=30,  # comfortably below any reasonable AUTOTRADER_ENTRY_SCORE_MIN
         dip_confidence=DipConfidence.MEDIUM,
     )
 
@@ -388,7 +425,7 @@ def test_trend_candidates_take_priority_over_dip_candidates_for_limited_slots(se
     for i in range(MAX_CONCURRENT_POSITIONS):
         scanner.set_signal(f"TREND{i}", SignalType.STRONG_BUY_SETUP, price=100.0, stop_loss=95.0, score=90)
     scanner.set_signal(
-        "DIP", SignalType.NEUTRAL, price=100.0, stop_loss=95.0, score=50, dip_confidence=DipConfidence.STRONG
+        "DIP", SignalType.NEUTRAL, price=100.0, stop_loss=95.0, score=30, dip_confidence=DipConfidence.STRONG
     )
 
     svc._tick_sync()
@@ -463,7 +500,7 @@ def test_dip_entry_skipped_when_daily_trend_is_confirmed_down(session_factory, s
     svc = _service(session_factory, scanner)
     svc.start_run(initial_cash=10_000.0, duration_days=7.0)
     scanner.set_signal(
-        "AAPL", SignalType.NEUTRAL, price=100.0, stop_loss=95.0, score=50,
+        "AAPL", SignalType.NEUTRAL, price=100.0, stop_loss=95.0, score=30,  # comfortably below any reasonable AUTOTRADER_ENTRY_SCORE_MIN
         dip_confidence=DipConfidence.STRONG, daily_trend_up=False,
     )
 

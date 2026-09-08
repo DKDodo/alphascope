@@ -61,6 +61,10 @@ class SimulationPosition(Base):
     # handling for them (see Database.ensure_columns()).
     take_profit_2: Mapped[float | None] = mapped_column(Float, nullable=True)
     partial_exit_done: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Consecutive exit-check passes (see AutoTraderService._update_avoid_streak)
+    # the signal has read AVOID -- exit only fires once this persists for
+    # AVOID_EXIT_STREAK_REQUIRED passes, instead of on a single noisy reading.
+    avoid_streak: Mapped[int] = mapped_column(Integer, default=0)
     opened_at: Mapped[datetime] = mapped_column(DateTime)
 
     run: Mapped[SimulationRun] = relationship(back_populates="positions")

@@ -2,9 +2,16 @@
 own signals: no human decides trades here, the rule-based SignalEngine does.
 
 Design choices, made explicit because they directly shape the results:
-- Entry: opens a position on STRONG_BUY_SETUP or BUY_SETUP if a slot is free.
-- Exit: closes on stop-loss/take-profit being hit, or the signal dropping to
-  AVOID, or the run's time window ending (mark-to-market close).
+- Entry: opens a position once a symbol's raw score clears
+  AUTOTRADER_ENTRY_SCORE_MIN, if a slot is free -- this is AutoTrader's own,
+  deliberately looser bar, decoupled from the dashboard's STRONG_BUY_SETUP/
+  BUY_SETUP labels (signal_engine.py's _THRESHOLDS). A backtest found the
+  display's 75/85 bar so strict AutoTrader sat in ~96% cash (~0.16
+  qualifying candidates/day across the whole universe) -- see app/backtest/.
+- Exit: closes on stop-loss/take-profit being hit, or the signal reading
+  AVOID for AVOID_EXIT_STREAK_REQUIRED consecutive checks in a row (not a
+  single reading -- that whipsawed positions out on routine noise, the
+  same backtest found), or the run's time window ending (mark-to-market close).
 - Sizing: risk-based (RISK_PER_TRADE_FRACTION of cash per trade, sized
   inversely to the stop distance) capped by MAX_POSITION_ALLOCATION_FRACTION
   -- a volatile/wide-ATR symbol gets fewer shares than a calm one for the
@@ -85,6 +92,25 @@ VIX_HIGH_THRESHOLD = 30.0  # -> quarter new-position risk
 MAX_DRAWDOWN_FRACTION = 0.10
 PARTIAL_EXIT_FRACTION = 0.5  # fraction of the position closed at TP1
 TRANSACTION_COST_RATE = 0.001  # 0.1% per leg (~0.2% round trip) -- one flat, simple assumption across all 3 markets
+# Calibrated via app/backtest/ against real Global (3y) + BIST (2y) history,
+# not guessed -- a grid sweep of entry ∈ {45,50,55,60,65} x streak ∈
+# {1,2,3,5} found streak=3 dominant almost everywhere, and entry=60 the
+# best cross-market average (Global +43.8%, BIST +13.9%, both solidly
+# positive -- lower entry values fit Global better but went negative on
+# BIST, a sign of overfitting to one market's history). AutoTrader's own
+# entry bar, independent of signal_engine.py's STRONG_BUY_SETUP/BUY_SETUP
+# display thresholds (75/85).
+AUTOTRADER_ENTRY_SCORE_MIN = 60
+# Same sweep: streak=3 was the dominant choice almost regardless of the
+# entry threshold (1-2 whipsawed too readily, 5 held losers too long,
+# especially on BIST). "Ardışık kontrol" means consecutive evaluations of
+# this position -- a live AutoTrader tick (AUTOTRADER_TICK_INTERVAL_SECONDS,
+# default 60s) in production, a trading day in the backtest (which only
+# re-evaluates once per day, see app/backtest/backtest_engine.py). Same
+# constant, different real-world time span in each context -- an
+# intentional simplification, not a precision claim; the goal in both is
+# just "don't exit on one noisy reading."
+AVOID_EXIT_STREAK_REQUIRED = 3
 
 
 def _as_utc(dt: datetime) -> datetime:
@@ -217,6 +243,7 @@ class AutoTraderService:
             if signal is None:
                 continue
             self._update_trailing_stop(position, signal)
+            self._update_avoid_streak(position, signal.signal)
 
             if self._should_take_partial_profit(position, signal.price):
                 self._partial_sell(db, run, position, signal.price)
@@ -239,13 +266,23 @@ class AutoTraderService:
         if trailing_candidate > position.stop_loss:
             position.stop_loss = trailing_candidate
 
+    def _update_avoid_streak(self, position: SimulationPosition, signal: SignalType) -> None:
+        """Counts consecutive exit-check passes the signal has read AVOID,
+        resetting the moment it doesn't -- a single noisy AVOID reading
+        (a routine pullback, not a real reversal) must not by itself close
+        the position; see AVOID_EXIT_STREAK_REQUIRED."""
+        if signal == SignalType.AVOID:
+            position.avoid_streak = (position.avoid_streak or 0) + 1
+        else:
+            position.avoid_streak = 0
+
     def _exit_reason(self, position: SimulationPosition, price: float, signal: SignalType) -> str | None:
         if position.stop_loss is not None and price <= position.stop_loss:
             return "Zarar-kes seviyesine ulaşıldı"
         if position.take_profit is not None and price >= position.take_profit:
             return "Kâr-al seviyesine ulaşıldı"
-        if signal == SignalType.AVOID:
-            return "Sinyal KAÇININ'a döndü"
+        if (position.avoid_streak or 0) >= AVOID_EXIT_STREAK_REQUIRED:
+            return f"Sinyal {AVOID_EXIT_STREAK_REQUIRED} ardışık kontrolde KAÇININ'da kaldı"
         return None
 
     def _should_take_partial_profit(self, position: SimulationPosition, price: float) -> bool:
@@ -320,7 +357,7 @@ class AutoTraderService:
         all_results = self._scanner_service.get_scan_results()
         trend_candidates = [
             r for r in all_results
-            if r.signal in (SignalType.STRONG_BUY_SETUP, SignalType.BUY_SETUP)
+            if r.score >= AUTOTRADER_ENTRY_SCORE_MIN
             and r.symbol not in open_symbols
             and r.daily_trend_up is not False
             and self._passes_long_term_outlook(r.symbol)
@@ -370,7 +407,10 @@ class AutoTraderService:
             reason = (
                 f"Dip Fırsatı ({result.dip_opportunity.confidence.value} güven) — aşırı satım tepki alımı"
                 if is_dip_entry
-                else f"Sinyal {result.signal.value} (skor {result.score})"
+                # Raw score, not the SignalType label -- a qualifying candidate
+                # can sit below the dashboard's BUY_SETUP bar (75) since
+                # AUTOTRADER_ENTRY_SCORE_MIN is deliberately looser.
+                else f"AutoTrader giriş eşiği aşıldı (skor {result.score}, görüntülenen sinyal: {result.signal.value})"
             )
 
             quantity = allocation / result.price
