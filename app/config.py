@@ -114,8 +114,11 @@ class Settings(BaseSettings):
         default=21_600.0, validation_alias="FUNDAMENTALS_POLL_INTERVAL_SECONDS"
     )
 
+    # Matches the dashboard's own 60s macro-strip refresh (app.js) so the
+    # displayed numbers actually change on most refreshes instead of only
+    # every few cycles.
     macro_poll_interval_seconds: float = Field(
-        default=300.0, validation_alias="MACRO_POLL_INTERVAL_SECONDS"
+        default=60.0, validation_alias="MACRO_POLL_INTERVAL_SECONDS"
     )
 
     @field_validator("live_trading_enabled")
