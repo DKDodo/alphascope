@@ -11,12 +11,22 @@ class PaperPortfolio:
         self._positions: dict[str, Position] = {}
         self._realized_pnl = 0.0
 
+    def restore_state(self, cash: float, positions: dict[str, Position], realized_pnl: float) -> None:
+        """Overwrites in-memory state from persisted data -- same idea as
+        ScannerEngine.seed_bar(): a pure state load, no I/O here (see
+        app/portfolio/portfolio_repository.py for the actual DB read).
+        Used to warm-start from a previous run so a restart doesn't wipe
+        out the user's manual positions."""
+        self._cash = cash
+        self._positions = dict(positions)
+        self._realized_pnl = realized_pnl
+
     def buy(self, symbol: str, quantity: float, price: float) -> Position:
         if quantity <= 0:
-            raise RiskCalculationError("quantity must be positive")
+            raise RiskCalculationError("Adet sıfırdan büyük olmalı.")
         cost = quantity * price
         if cost > self._cash:
-            raise RiskCalculationError("insufficient paper cash for this order")
+            raise RiskCalculationError("Bu emir için yeterli kağıt nakit yok.")
 
         self._cash -= cost
         existing = self._positions.get(symbol)
@@ -37,7 +47,7 @@ class PaperPortfolio:
     def sell(self, symbol: str, quantity: float, price: float) -> Position | None:
         existing = self._positions.get(symbol)
         if existing is None or quantity > existing.quantity:
-            raise RiskCalculationError("cannot sell more than the current paper position")
+            raise RiskCalculationError("Elinizdeki pozisyondan fazlasını satamazsınız.")
 
         self._realized_pnl += (price - existing.average_price) * quantity
         self._cash += quantity * price

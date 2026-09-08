@@ -33,7 +33,9 @@ Market Data (Global + BIST, both Yahoo Finance) -> Normalizer -> Scanner -> Indi
 - Computes ATR-based stop-loss/take-profit ("sell" price floors) and a
   Bollinger/ATR-based reference pullback zone ("buy" price floor).
 - Fetches per-symbol news headlines and scores them locally with FinBERT (no API key, no data leaves the machine).
-- Tracks a virtual paper trading portfolio, separately per market.
+- Tracks a virtual paper trading portfolio, separately per market — either
+  by hand (manual Buy/Sell against live prices) or fully automated
+  (AutoTrader's own N-day simulation, running independently).
 
 None of this is investment advice.
 
@@ -89,8 +91,10 @@ a shortcut on the Desktop.
 sekmeli piyasa görünümü (**Global (ABD)** ve **BIST 30**), tarayıcı
 sonuçları, sembol detayı (skor kırılımı, hem olumlu hem olumsuz gerekçeler,
 risk analizi, alım için referans fiyat bölgesi, son haberler ve duyarlılık
-özeti), pozisyon büyüklüğü hesaplayıcı ve her piyasa için ayrı kağıt portföy
-özeti — hepsi Türkçe ve 5 saniyede bir otomatik yenilenir. Tamamen istemci
+özeti, manuel Al/Sat işlemi), pozisyon büyüklüğü hesaplayıcı ve her piyasa
+için ayrı, gerçekten tıklanabilir bir kağıt portföy (pozisyonlar, canlı
+gerçekleşmemiş K/Z, işlem geçmişi) — hepsi Türkçe ve 5 saniyede bir otomatik
+yenilenir. Tamamen istemci
 tarafı; harici bir kütüphane gerektirmez (sadece `/docs` Swagger sayfası CDN
 kullanır; BIST sekmesi ve haberler Yahoo Finance'e erişim gerektirir). Bu
 dashboard, PyInstaller ile paketlenen `AlphaScope.exe` içine de otomatik
@@ -265,7 +269,8 @@ Tüm tarayıcı/sinyal/haber/portföy uç noktaları `{market}` parametresi alı
 - `GET /api/{market}/news/{symbol}` — haber başlıkları + duyarlılık özeti.
 - `GET /api/{market}/fundamentals/{symbol}` — uzun vadeli görünüm (temel analiz).
 - `GET /api/{market}/macro` — makro göstergeler (USD/TRY, BIST 100, S&P 500, VIX).
-- `GET /api/{market}/portfolio` — o piyasanın kağıt portföy durumu.
+- `GET /api/{market}/portfolio` — o piyasanın kağıt portföy durumu (pozisyonlar, canlı K/Z, işlem geçmişi).
+- `POST /api/{market}/portfolio/buy`, `POST /api/{market}/portfolio/sell` — manuel kağıt alım/satım (`{symbol, quantity}`; fiyat her zaman sunucu tarafında canlı sinyalden çözülür).
 - `GET /api/{market}/simulation/status`, `POST /api/{market}/simulation/start` — N günlük otomatik simülasyon.
 - `POST /api/risk/position-size` — hesap bakiyesi/risk yüzdesi/giriş/stop'tan pozisyon büyüklüğü.
 
@@ -339,7 +344,13 @@ See `.env.example`. Key settings:
   `ensure_columns()` is what lets these new SQLite columns land on a
   simulation that was already running before the upgrade, without losing
   its history — `create_all()` alone only creates brand-new tables.
-- `app/portfolio/` — virtual paper trading only.
+- `app/portfolio/` — virtual paper trading only. `PaperPortfolio` is a pure,
+  DB-unaware buy()/sell() engine (same shape as `ScannerEngine`); persistence
+  is bolted on separately via `portfolio_repository.py`
+  (mirrors `bar_repository.py`'s plain-function style) so a manual position
+  survives a restart. Fully independent from AutoTrader, which keeps its
+  own positions in `simulation_positions` — the two never interact beyond
+  reading the same live price stream.
 - `app/services/` — background tasks wiring the provider stream into the scanner,
   with reconnect/backoff so a provider outage never crashes the app.
 

@@ -55,8 +55,11 @@ class Settings(BaseSettings):
 
     log_level: str = Field(default="INFO", validation_alias="LOG_LEVEL")
 
+    # Starting balance for the manual ("Kağıt Portföy") paper portfolio the
+    # user trades by hand -- separate from AutoTrader, whose own starting
+    # cash is chosen per-run from the simulation start form instead.
     initial_paper_cash: float = Field(
-        default=100_000.0, validation_alias="INITIAL_PAPER_CASH"
+        default=10_000.0, validation_alias="INITIAL_PAPER_CASH"
     )
 
     # Global (ABD) tab — real, delayed Yahoo Finance data (no suffix needed
@@ -125,7 +128,7 @@ class Settings(BaseSettings):
         default=60.0, validation_alias="CRYPTO_POLL_INTERVAL_SECONDS"
     )
     crypto_initial_paper_cash: float = Field(
-        default=100_000.0, validation_alias="CRYPTO_INITIAL_PAPER_CASH"
+        default=10_000.0, validation_alias="CRYPTO_INITIAL_PAPER_CASH"
     )
 
     @property

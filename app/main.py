@@ -42,6 +42,7 @@ from app.market_data.models import MarketEvent
 from app.market_data.providers.mock_provider import MockProvider
 from app.market_data.providers.yfinance_provider import YFinanceProvider
 from app.news.news_service import NewsService
+from app.portfolio import portfolio_repository
 from app.portfolio.paper_portfolio import PaperPortfolio
 from app.risk.risk_engine import RiskEngine
 from app.scanner import bar_repository
@@ -142,6 +143,9 @@ def _build_context(
     _seed_scanner_from_db(scanner_engine, db, key, universe.symbols)
     signal_engine = SignalEngine(risk_engine=RiskEngine())
     portfolio = PaperPortfolio(starting_cash=starting_cash)
+    persisted_portfolio = portfolio_repository.load_state(db.session_factory, key)
+    if persisted_portfolio is not None:
+        portfolio.restore_state(*persisted_portfolio)
 
     # Built before ScannerService so it can be handed in directly — daily
     # bars change slowly, so this is its own independently-polled service

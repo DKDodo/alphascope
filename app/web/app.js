@@ -359,6 +359,15 @@ function renderDetay(detay, korumaliIcerik) {
     ${buyZoneHtml}
     ${dipHtml}
     ${gunlukTrendHtml}
+    <div class="calc-form">
+      <h3>Manuel İşlem (Kağıt Portföy) — ${detay.symbol}</h3>
+      <div class="calc-row">
+        <input type="number" id="islem-adet" placeholder="Adet" min="0" step="0.0001" />
+        <button id="manuel-al-btn">Al</button>
+        <button id="manuel-sat-btn" style="background:var(--red);">Sat</button>
+      </div>
+      <div class="calc-result" id="manuel-islem-sonuc"></div>
+    </div>
     <h3 style="font-size:13px;color:var(--accent);margin:18px 0 6px;border-top:1px solid var(--panel-border);padding-top:14px;">📈 Uzun Vadeli Görünüm (Temel Analiz)</h3>
     <div id="uzun-vade-icerik">${(korumaliIcerik && korumaliIcerik.uzunVade) || '<p class="detail-empty">Yükleniyor...</p>'}</div>
     <h3 style="font-size:13px;color:var(--muted);margin:14px 0 6px;">📰 Son Haberler ve Duyarlılık</h3>
@@ -380,8 +389,32 @@ function renderDetay(detay, korumaliIcerik) {
   `;
 
   document.getElementById("hesapla-btn").addEventListener("click", pozisyonHesapla);
+  document.getElementById("manuel-al-btn").addEventListener("click", () => manuelIslemYap("buy", detay.symbol));
+  document.getElementById("manuel-sat-btn").addEventListener("click", () => manuelIslemYap("sell", detay.symbol));
   haberleriYukle(detay.symbol);
   uzunVadeYukle(detay.symbol);
+}
+
+async function manuelIslemYap(yon, sembol) {
+  const adetEl = document.getElementById("islem-adet");
+  const sonucEl = document.getElementById("manuel-islem-sonuc");
+  const adet = parseFloat(adetEl.value);
+  if (!adet || adet <= 0) {
+    sonucEl.innerHTML = '<span class="pnl-neg">Geçerli bir adet girin.</span>';
+    return;
+  }
+  try {
+    await veriCek(`/api/${aktifPazar}/portfolio/${yon}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ symbol: sembol, quantity: adet }),
+    });
+    sonucEl.innerHTML = `<span class="pnl-pos">${yon === "buy" ? "Alım" : "Satım"} başarılı.</span>`;
+    adetEl.value = "";
+    portfoyYenile();
+  } catch (err) {
+    sonucEl.innerHTML = `<span class="pnl-neg">${err.message}</span>`;
+  }
 }
 
 const SENTIMENT_ETIKET = {
@@ -598,20 +631,34 @@ async function portfoyYenile() {
     govde.innerHTML = "";
     if (pf.positions.length === 0) {
       govde.innerHTML = '<tr><td colspan="5" class="empty-row">Açık pozisyon yok.</td></tr>';
-      return;
+    } else {
+      for (const pos of pf.positions) {
+        const pnl = (pos.current_price - pos.average_price) * pos.quantity;
+        const tr = document.createElement("tr");
+        tr.innerHTML = `
+          <td><strong>${pos.symbol}</strong></td>
+          <td>${paraFormat(pos.quantity)}</td>
+          <td>${paraBirimli(pos.average_price)}</td>
+          <td>${paraBirimli(pos.current_price)}</td>
+          <td class="${pnl >= 0 ? "pnl-pos" : "pnl-neg"}">${paraBirimli(pnl)}</td>
+        `;
+        govde.appendChild(tr);
+      }
     }
-    for (const pos of pf.positions) {
-      const pnl = (pos.current_price - pos.average_price) * pos.quantity;
-      const tr = document.createElement("tr");
-      tr.innerHTML = `
-        <td><strong>${pos.symbol}</strong></td>
-        <td>${paraFormat(pos.quantity)}</td>
-        <td>${paraBirimli(pos.average_price)}</td>
-        <td>${paraBirimli(pos.current_price)}</td>
-        <td class="${pnl >= 0 ? "pnl-pos" : "pnl-neg"}">${paraBirimli(pnl)}</td>
-      `;
-      govde.appendChild(tr);
-    }
+
+    const islemGovde = document.getElementById("pf-islem-govde");
+    const islemler = pf.recent_trades || [];
+    islemGovde.innerHTML = islemler.length
+      ? islemler.map((t) => `
+          <tr>
+            <td>${new Date(t.timestamp).toLocaleString("tr-TR")}</td>
+            <td><strong>${t.symbol}</strong></td>
+            <td><span class="badge badge-${t.action === "BUY" ? "STRONG_BUY_SETUP" : "AVOID"}">${t.action === "BUY" ? "ALIM" : "SATIM"}</span></td>
+            <td>${paraBirimli(t.price)}</td>
+            <td>${paraFormat(t.quantity)}</td>
+            <td>${t.realized_pnl !== null ? `<span class="${t.realized_pnl >= 0 ? "pnl-pos" : "pnl-neg"}">${paraBirimli(t.realized_pnl)}</span>` : "-"}</td>
+          </tr>`).join("")
+      : '<tr><td colspan="6" class="empty-row">Henüz işlem yok.</td></tr>';
   } catch (err) {
     console.error(err);
   }

@@ -27,3 +27,8 @@ class PortfolioSnapshot(BaseModel):
     realized_pnl: float
     unrealized_pnl: float
     equity: float
+
+
+class ManualTradeRequest(BaseModel):
+    symbol: str
+    quantity: float
