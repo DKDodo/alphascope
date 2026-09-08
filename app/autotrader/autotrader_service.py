@@ -122,6 +122,18 @@ class AutoTraderService:
             )
             return self._to_status_out(db, run)
 
+    def stop_run(self) -> SimulationStatusOut:
+        """Manually ends the active run right now: liquidates every open
+        position at the current market price (same mark-to-market close the
+        scheduled end-of-run uses) and marks it COMPLETED. Irreversible --
+        there's no "resume", the user has to start a fresh run."""
+        with self._session() as db:
+            run = self._get_active_run(db)
+            if run is None:
+                raise RiskCalculationError("Durdurulacak çalışan bir simülasyon yok.")
+            self._close_run(db, run, reason="Kullanıcı tarafından durduruldu")
+            return self._to_status_out(db, run)
+
     def get_status(self) -> SimulationStatusOut:
         with self._session() as db:
             run = self._get_latest_run(db)
@@ -276,18 +288,23 @@ class AutoTraderService:
             self._market, position.symbol, position.quantity, price, pnl, reason,
         )
 
-    def _close_run(self, db: Session, run: SimulationRun) -> None:
+    def _close_run(
+        self,
+        db: Session,
+        run: SimulationRun,
+        reason: str = "Simülasyon süresi doldu (mark-to-market kapanış)",
+    ) -> None:
         positions = db.execute(
             select(SimulationPosition).where(SimulationPosition.run_id == run.id)
         ).scalars().all()
         for position in positions:
             signal = self._scanner_service.get_signal(position.symbol)
             price = signal.price if signal is not None else position.average_price
-            self._sell(db, run, position, price, "Simülasyon süresi doldu (mark-to-market kapanış)")
+            self._sell(db, run, position, price, reason)
         run.status = "COMPLETED"
         run.completed_at = datetime.now(timezone.utc)
         db.commit()
-        logger.info("[%s] simulation completed, realized_pnl=%.2f", self._market, run.realized_pnl)
+        logger.info("[%s] simulation completed (%s), realized_pnl=%.2f", self._market, reason, run.realized_pnl)
 
     # -- helpers ------------------------------------------------------------------------
 

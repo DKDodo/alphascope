@@ -295,6 +295,14 @@ tbody tr:hover { background: #16202c; cursor: pointer; }
 .sim-progress-track { height: 6px; border-radius: 4px; background: #0e141c; overflow: hidden; margin-top: 6px; }
 .sim-progress-fill { height: 100%; background: var(--accent); border-radius: 4px; }
 
+.sim-stop-btn {
+  background: transparent; border: 1px solid var(--red); color: var(--red);
+  border-radius: 6px; padding: 6px 14px; font-size: 12px; font-weight: 600;
+  cursor: pointer; margin: 8px 0 4px;
+}
+.sim-stop-btn:hover { background: rgba(231,76,60,0.1); }
+.sim-stop-btn:disabled { opacity: 0.5; cursor: default; }
+
 .sim-badge-completed { background: rgba(61,139,253,0.15); color: var(--accent); }
 
 .sim-trades-table { margin-top: 14px; }

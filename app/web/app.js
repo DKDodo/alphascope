@@ -694,7 +694,9 @@ function renderSimulasyon(sim) {
       ${durumRozeti}
       ${sim.status === "RUNNING" ? `— Kalan süre: <strong>${gunFormat(sim.days_remaining)}</strong>` : `— Tamamlandı: ${sim.completed_at ? new Date(sim.completed_at).toLocaleString("tr-TR") : ""}`}
     </div>
-    ${sim.status === "RUNNING" ? `<div class="sim-progress"><div class="sim-progress-track"><div class="sim-progress-fill" style="width:${ilerlemeYuzde}%"></div></div></div>` : ""}
+    ${sim.status === "RUNNING" ? `
+      <div class="sim-progress"><div class="sim-progress-track"><div class="sim-progress-fill" style="width:${ilerlemeYuzde}%"></div></div></div>
+      <button id="sim-durdur-btn" class="sim-stop-btn">Simülasyonu Durdur</button>` : ""}
     <div class="portfolio-summary">
       <div class="stat"><span class="stat-label">Başlangıç</span><span class="stat-value">${birim} ${paraFormat(sim.initial_cash)}</span></div>
       <div class="stat"><span class="stat-label">Güncel Toplam Değer</span><span class="stat-value">${birim} ${paraFormat(sim.equity)}</span></div>
@@ -724,6 +726,8 @@ function renderSimulasyon(sim) {
 
   const baslatBtn = document.getElementById("sim-baslat-btn");
   if (baslatBtn) baslatBtn.addEventListener("click", simulasyonBaslat);
+  const durdurBtn = document.getElementById("sim-durdur-btn");
+  if (durdurBtn) durdurBtn.addEventListener("click", simulasyonDurdur);
 }
 
 async function simulasyonBaslat() {
@@ -743,6 +747,26 @@ async function simulasyonBaslat() {
     alert("Simülasyon başlatılamadı: " + err.message);
     btn.disabled = false;
     btn.textContent = "Simülasyonu Başlat";
+  }
+}
+
+async function simulasyonDurdur() {
+  const onay = confirm(
+    "Simülasyonu durdurmak istediğinizden emin misiniz?\n\n" +
+    "Açık pozisyonlar varsa güncel fiyattan satılacak ve simülasyon sona erecek. Bu işlem geri alınamaz."
+  );
+  if (!onay) return;
+
+  const btn = document.getElementById("sim-durdur-btn");
+  btn.disabled = true;
+  btn.textContent = "Durduruluyor...";
+  try {
+    await veriCek(`/api/${aktifPazar}/simulation/stop`, { method: "POST" });
+    await simulasyonYenile();
+  } catch (err) {
+    alert("Simülasyon durdurulamadı: " + err.message);
+    btn.disabled = false;
+    btn.textContent = "Simülasyonu Durdur";
   }
 }
 

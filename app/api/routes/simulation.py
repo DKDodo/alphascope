@@ -25,3 +25,12 @@ async def start_simulation(request: Request, market: str, payload: StartSimulati
         initial_cash=payload.initial_cash, duration_days=payload.duration_days
     )
     return result.model_dump(mode="json")
+
+
+@router.post("/stop")
+async def stop_simulation(request: Request, market: str) -> dict:
+    ctx = get_market_context(request, market)
+    if ctx.autotrader_service is None:
+        raise HTTPException(status_code=404, detail="Bu piyasada simülasyon özelliği devre dışı")
+    result = ctx.autotrader_service.stop_run()
+    return result.model_dump(mode="json")

@@ -164,6 +164,42 @@ def test_no_active_run_status_is_not_started(session_factory, scanner):
     assert status.status.value == "NOT_STARTED"
 
 
+def test_stop_run_liquidates_positions_and_completes(session_factory, scanner):
+    svc = _service(session_factory, scanner)
+    svc.start_run(initial_cash=10_000.0, duration_days=7.0)
+    scanner.set_signal("AAPL", SignalType.STRONG_BUY_SETUP, price=100.0, stop_loss=95.0, take_profit_1=200.0)
+    svc._tick_sync()  # buys AAPL
+    scanner.set_signal("AAPL", SignalType.STRONG_BUY_SETUP, price=105.0, stop_loss=95.0, take_profit_1=200.0)
+
+    status = svc.stop_run()
+
+    assert status.status.value == "COMPLETED"
+    assert len(status.positions) == 0
+    assert status.recent_trades[0].action == "SELL"
+    assert "Kullanıcı tarafından durduruldu" in status.recent_trades[0].reason
+    assert status.realized_pnl is not None and status.realized_pnl > 0  # bought at 100, closed at 105
+
+    # a stopped run is done -- a subsequent tick must be a no-op, not resume it
+    svc._tick_sync()
+    assert svc.get_status().status.value == "COMPLETED"
+
+
+def test_stop_run_without_active_run_raises(session_factory, scanner):
+    svc = _service(session_factory, scanner)
+    with pytest.raises(RiskCalculationError):
+        svc.stop_run()
+
+
+def test_stop_run_allows_starting_a_new_simulation(session_factory, scanner):
+    svc = _service(session_factory, scanner)
+    svc.start_run(initial_cash=10_000.0, duration_days=7.0)
+    svc.stop_run()
+
+    status = svc.start_run(initial_cash=5_000.0, duration_days=3.0)
+    assert status.status.value == "RUNNING"
+    assert status.cash == 5_000.0
+
+
 def test_position_sizing_scales_inversely_with_stop_distance(session_factory, scanner):
     svc = _service(session_factory, scanner)
     svc.start_run(initial_cash=10_000.0, duration_days=7.0)
