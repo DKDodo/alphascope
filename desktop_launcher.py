@@ -1,5 +1,6 @@
 """One-click desktop entrypoint: starts the AlphaScope API server and opens
-the dashboard in the default browser. This is what AlphaScope.exe runs.
+the dashboard in its own native window (not a browser tab). This is what
+AlphaScope.exe runs.
 
 Paper trading only — starting this executable never places a real order.
 """
@@ -9,7 +10,7 @@ import os
 import sys
 import threading
 import time
-import webbrowser
+import urllib.request
 
 HOST = "127.0.0.1"
 PORT = 8000
@@ -38,20 +39,47 @@ def _configure_environment() -> None:
     os.environ.setdefault("LIVE_TRADING_ENABLED", "false")
 
 
-def _open_browser_when_ready() -> None:
-    time.sleep(1.5)
-    webbrowser.open(f"http://{HOST}:{PORT}/")
+def _run_server() -> None:
+    import uvicorn
+
+    from app.main import app as fastapi_app  # noqa: E402 - env must be set first
+
+    uvicorn.run(fastapi_app, host=HOST, port=PORT, log_level="warning")
+
+
+def _wait_until_ready(timeout_seconds: float = 20.0) -> None:
+    # The native window loads this URL immediately after being created; a
+    # cold uvicorn start (first run, antivirus scanning the new exe, slow
+    # disk) can take longer than a fixed sleep would assume, so poll /health
+    # instead of guessing a delay.
+    deadline = time.monotonic() + timeout_seconds
+    url = f"http://{HOST}:{PORT}/health"
+    while time.monotonic() < deadline:
+        try:
+            with urllib.request.urlopen(url, timeout=1.0) as resp:
+                if resp.status == 200:
+                    return
+        except Exception:
+            pass
+        time.sleep(0.2)
 
 
 def main() -> None:
     _configure_environment()
 
-    import uvicorn
+    import webview
 
-    from app.main import app as fastapi_app  # noqa: E402 - env must be set first
+    threading.Thread(target=_run_server, daemon=True).start()
+    _wait_until_ready()
 
-    threading.Thread(target=_open_browser_when_ready, daemon=True).start()
-    uvicorn.run(fastapi_app, host=HOST, port=PORT, log_level="info")
+    webview.create_window(
+        "AlphaScope",
+        url=f"http://{HOST}:{PORT}/",
+        width=1400,
+        height=900,
+        min_size=(1000, 700),
+    )
+    webview.start()
 
 
 if __name__ == "__main__":
