@@ -139,11 +139,36 @@ olumlu/olumsuz/nötr olarak sınıflandırılır.
   önbelleğe (`~/.cache/huggingface`) kaydedilir; sonraki çalıştırmalar
   internet olmadan da modeli kullanabilir (haber çekmek için yine internet gerekir).
 - **Devre dışı bırakma / zarif düşüş:** `torch`/`transformers` kurulu değilse
-  ya da model yüklenemezse, haber başlıkları yine gösterilir, sadece
-  duyarlılık etiketi `UNAVAILABLE` olur — sistem çökmez. Tamamen kapatmak
-  için `.env`'de `NEWS_ENABLED=false`.
+  ya da model yüklenemezse (web deploy'u bunları boyut/RAM nedeniyle içermiyor,
+  bkz. `requirements-web.txt`), sistem otomatik olarak hafif, anahtar kelime
+  tabanlı bir sınıflandırıcıya düşer (`app/news/keyword_sentiment.py`) — haber
+  başlıkları her koşulda gösterilir, hangi yöntemin kullanıldığı
+  (`sentiment_method: "finbert" | "keyword"`) API yanıtında ve arayüzde
+  açıkça belirtilir, biri diğeriyle karıştırılmaz. Tamamen kapatmak için
+  `.env`'de `NEWS_ENABLED=false`.
 - **Sorgu sıklığı:** `NEWS_POLL_INTERVAL_SECONDS` (varsayılan 900sn/15dk) —
   haberler dakikada bir değişmediği için sık sorgulamaya gerek yok.
+
+## Uzun vadeli görünüm (temel analiz) ve makro bağlam
+
+Her sembol detayında, kısa vadeli teknik sinyalden tamamen ayrı olarak:
+
+- **Uzun Vadeli Görünüm**: F/K oranı, kâr marjı, gelir büyümesi, ROE,
+  borç/özkaynak oranı, analist konsensüsü ve uzun vadeli trend (EMA50 vs
+  EMA200) — `app/fundamentals/`. Kısa vadeli Fırsat Skoru ile **kasıtlı
+  olarak birleştirilmez**: bir hisse kısa vadede iyi bir teknik kurulum,
+  uzun vadede zayıf bir temel hikâye olabilir (ya da tam tersi).
+- **Makro şerit** (sekmelerin altında): BIST'te USD/TRY ve BIST 100, Global'de
+  S&P 500 ve VIX — `app/macro/`. Sadece bilgi amaçlı, hiçbir skora karışmaz.
+
+**⚠️ Bilinen kısıtlama (web deploy'unda):** Uzun Vadeli Görünüm verisi
+Yahoo Finance'in `quoteSummary` uç noktasından geliyor; gözlemlediğimiz
+kadarıyla bu uç nokta bazı bulut barındırma IP'lerini (Render dahil)
+engelliyor — fiyat/tarama/makro verisinin geldiği `chart`/`download` uç
+noktası engellenmiyor. Sonuç: web sürümünde Uzun Vadeli Görünüm çalışmayabilir
+(arayüzde bunu açıkça belirtiriz — bkz. `likely_blocked` alanı), **masaüstü
+sürümünde ise sorunsuz çalışır**. Kalıcı bir çözüm için API-key'li ücretli
+bir veri kaynağına geçmek gerekir.
 
 ## Gerekçeler ve fiyat seviyeleri
 
@@ -170,7 +195,10 @@ Tüm tarayıcı/sinyal/haber/portföy uç noktaları `{market}` parametresi alı
 - `GET /api/{market}/scanner` — tarayıcı sonuçları (`?min_score=`, `?signal=`).
 - `GET /api/{market}/signals/{symbol}` — skor kırılımı, gerekçeler, risk analizi, alım bölgesi.
 - `GET /api/{market}/news/{symbol}` — haber başlıkları + duyarlılık özeti.
+- `GET /api/{market}/fundamentals/{symbol}` — uzun vadeli görünüm (temel analiz).
+- `GET /api/{market}/macro` — makro göstergeler (USD/TRY, BIST 100, S&P 500, VIX).
 - `GET /api/{market}/portfolio` — o piyasanın kağıt portföy durumu.
+- `GET /api/{market}/simulation/status`, `POST /api/{market}/simulation/start` — N günlük otomatik simülasyon.
 - `POST /api/risk/position-size` — hesap bakiyesi/risk yüzdesi/giriş/stop'tan pozisyon büyüklüğü.
 
 Örnek: `GET /api/bist/scanner`, `GET /api/global/signals/AAPL`, `GET /api/bist/news/THYAO`.
@@ -200,7 +228,13 @@ See `.env.example`. Key settings:
 - `app/scanner/scanner_engine.py` — rolling per-symbol OHLCV state + indicator computation.
 - `app/signals/` — scoring rules (with both supporting and opposing reasons) and signal classification.
 - `app/risk/` — ATR-based stop/target and position sizing.
-- `app/news/` — Yahoo Finance headline fetching + local FinBERT sentiment scoring.
+- `app/news/` — Yahoo Finance headline fetching + FinBERT sentiment scoring
+  (falls back to `keyword_sentiment.py` when torch/transformers aren't installed).
+- `app/fundamentals/` — long-term outlook: company fundamentals + long-term
+  trend, scored separately from the short-term signal.
+- `app/macro/` — informational macro indicators (FX pairs, market indices).
+- `app/autotrader/` — self-driving N-day paper trading simulation, persisted
+  to SQLite (`app/autotrader/db_models.py`) so a run survives a restart.
 - `app/portfolio/` — virtual paper trading only.
 - `app/services/` — background tasks wiring the provider stream into the scanner,
   with reconnect/backoff so a provider outage never crashes the app.

@@ -31,6 +31,7 @@ class FundamentalsService:
         self._latest: dict[str, FundamentalSnapshot] = {}
         self._task: asyncio.Task | None = None
         self._stopping = False
+        self._cycles_run = 0
 
     async def start(self) -> None:
         self._stopping = False
@@ -62,7 +63,18 @@ class FundamentalsService:
             if snapshot is not None:
                 self._latest[symbol] = snapshot
                 found += 1
+        self._cycles_run += 1
         logger.info("fundamentals cycle complete: %d/%d symbols", found, len(self._symbols))
+
+    @property
+    def likely_blocked(self) -> bool:
+        """True once we've genuinely tried (a few full cycles) and gotten
+        nothing back for any symbol — distinguishes 'data hasn't arrived
+        yet' from 'this data source doesn't work from this host' (observed
+        in production: Yahoo's quoteSummary endpoint that fundamentals data
+        comes from blocks some cloud-hosting IPs, while the price-only
+        endpoints the rest of the app uses do not)."""
+        return self._cycles_run >= 1 and not self._latest
 
     def get_long_term_outlook(self, symbol: str) -> LongTermOutlook:
         symbol = symbol.upper()

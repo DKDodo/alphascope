@@ -13,4 +13,6 @@ async def get_long_term_outlook(request: Request, market: str, symbol: str) -> d
     if ctx.fundamentals_service is None:
         raise HTTPException(status_code=404, detail="Bu piyasada temel analiz özelliği devre dışı")
     outlook = ctx.fundamentals_service.get_long_term_outlook(symbol)
-    return outlook.model_dump(mode="json")
+    payload = outlook.model_dump(mode="json")
+    payload["likely_blocked"] = ctx.fundamentals_service.likely_blocked
+    return payload

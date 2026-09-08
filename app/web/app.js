@@ -334,7 +334,16 @@ function renderUzunVade(outlook) {
   const f = outlook.fundamentals;
 
   if (outlook.label === "INSUFFICIENT_DATA" || !f) {
-    kutu.innerHTML = '<p class="detail-empty">Bu sembol için henüz yeterli temel veri toplanmadı (birkaç saat içinde güncellenir).</p>';
+    if (outlook.likely_blocked) {
+      kutu.innerHTML = `
+        <p class="detail-empty" style="text-align:left;">
+          ⚠️ Temel analiz verisi bu sunucudan şu anda alınamıyor — veri kaynağı (Yahoo Finance),
+          bu barındırma ortamının IP adresini bu tür sorgular için kısıtlıyor. Bu, koddaki bir hata
+          değil; masaüstü uygulamasında (kendi bilgisayarınızda) bu özellik sorunsuz çalışıyor.
+        </p>`;
+    } else {
+      kutu.innerHTML = '<p class="detail-empty">Bu sembol için henüz yeterli temel veri toplanmadı (birkaç saat içinde güncellenir).</p>';
+    }
     return;
   }
 
