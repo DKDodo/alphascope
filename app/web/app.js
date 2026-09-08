@@ -329,6 +329,16 @@ function renderDetay(detay, korumaliIcerik) {
       </div>`;
   }
 
+  let gunlukTrendHtml = "";
+  if (detay.daily_trend_up !== null && detay.daily_trend_up !== undefined) {
+    const yukselis = detay.daily_trend_up === true;
+    gunlukTrendHtml = `
+      <p class="hint" style="margin:8px 0;">
+        📅 Günlük Trend (EMA50/EMA200): <strong>${yukselis ? "Yükseliş ✅" : "Düşüş ⚠️"}</strong>
+        — otomatik simülasyonda giriş onayı olarak kullanılır, Fırsat Skoru'nu etkilemez.
+      </p>`;
+  }
+
   icerik.innerHTML = `
     <div class="detail-symbol">
       <span class="sym">${detay.symbol}</span>
@@ -348,6 +358,7 @@ function renderDetay(detay, korumaliIcerik) {
     ${riskHtml || '<p class="detail-empty">Risk analizi için yeterli veri yok.</p>'}
     ${buyZoneHtml}
     ${dipHtml}
+    ${gunlukTrendHtml}
     <h3 style="font-size:13px;color:var(--accent);margin:18px 0 6px;border-top:1px solid var(--panel-border);padding-top:14px;">📈 Uzun Vadeli Görünüm (Temel Analiz)</h3>
     <div id="uzun-vade-icerik">${(korumaliIcerik && korumaliIcerik.uzunVade) || '<p class="detail-empty">Yükleniyor...</p>'}</div>
     <h3 style="font-size:13px;color:var(--muted);margin:14px 0 6px;">📰 Son Haberler ve Duyarlılık</h3>

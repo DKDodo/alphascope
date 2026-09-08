@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from app.core.events import AsyncEventBus
 from app.core.logging import get_logger
+from app.daily_trend.daily_trend_service import DailyTrendService
 from app.market_data.models import EventType, MarketEvent
 from app.portfolio.paper_portfolio import PaperPortfolio
 from app.scanner import bar_repository
@@ -29,6 +30,7 @@ class ScannerService:
         scan_interval_seconds: float = 5.0,
         market_key: str | None = None,
         session_factory: sessionmaker[Session] | None = None,
+        daily_trend_service: DailyTrendService | None = None,
     ) -> None:
         self._event_bus = event_bus
         self._scanner_engine = scanner_engine
@@ -40,6 +42,7 @@ class ScannerService:
         # tests can construct a ScannerService without a database at all.
         self._market_key = market_key
         self._session_factory = session_factory
+        self._daily_trend_service = daily_trend_service
 
         self._latest_results: dict[str, SignalResult] = {}
         self._consumer_task: asyncio.Task | None = None
@@ -109,7 +112,10 @@ class ScannerService:
             indicators = self._scanner_engine.compute_indicators(symbol)
             if indicators is None:
                 continue
-            result = self._signal_engine.evaluate(indicators)
+            daily_trend_up = (
+                self._daily_trend_service.get_trend(symbol) if self._daily_trend_service else None
+            )
+            result = self._signal_engine.evaluate(indicators, daily_trend_up=daily_trend_up)
             if result is not None:
                 self._track_signal_change(symbol, result)
                 results[symbol] = result

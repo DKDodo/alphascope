@@ -29,7 +29,9 @@ class SignalEngine:
     def __init__(self, risk_engine: RiskEngine | None = None) -> None:
         self._risk_engine = risk_engine or RiskEngine()
 
-    def evaluate(self, ind: IndicatorSnapshot) -> SignalResult | None:
+    def evaluate(
+        self, ind: IndicatorSnapshot, daily_trend_up: bool | None = None
+    ) -> SignalResult | None:
         risk_analysis: RiskAnalysis | None = None
         if ind.atr14 is not None and ind.atr14 > 0:
             resistance_price = ind.bollinger.upper if ind.bollinger is not None else None
@@ -78,6 +80,7 @@ class SignalEngine:
             bars_available=ind.bars_available,
             data_age_seconds=_compute_data_age(ind),
             dip_opportunity=detect_dip_opportunity(ind),
+            daily_trend_up=daily_trend_up,
         )
 
 

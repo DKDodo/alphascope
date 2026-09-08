@@ -10,12 +10,25 @@ Design choices, made explicit because they directly shape the results:
   -- a volatile/wide-ATR symbol gets fewer shares than a calm one for the
   same dollar risk, rather than every symbol getting the same cash share
   regardless of how far it could move against you. Concurrent-position cap
-  forces diversification (though not across sectors -- see README).
+  forces diversification, further reinforced by the sector cap below.
 - Stop-loss trails up (ATR distance from current price) as a position gains,
   never back down: locks in gains instead of giving back a whole reversal.
 - Persisted to SQLite (see db_models.py) so the run survives a process
   restart — critical for a "7-day" claim to mean anything on a host that
   can sleep/redeploy.
+- Sector-capped: at most MAX_POSITIONS_PER_SECTOR open positions share the
+  same FundamentalsService sector, so the concurrent-position cap forces
+  real diversification instead of five correlated bets in one industry.
+  Skipped entirely when fundamentals data isn't available (e.g. crypto).
+- A second, independent entry path opens on a STRONG DipOpportunity even
+  when the trend-following signal isn't a buy setup -- see app/signals/dip_detector.py
+  for why the two can disagree. Trade-logged with a distinguishable reason
+  so it's never confused with a trend-based buy.
+- Both entry paths additionally require the daily-bar trend (EMA50 vs
+  EMA200, see app/daily_trend/) not to be confirmed down, and position
+  sizing is derated when VIX is elevated (see MacroService) -- the
+  Opportunity Score itself never uses either signal, only this trading
+  decision does.
 """
 from __future__ import annotations
 
@@ -34,9 +47,11 @@ from app.autotrader.models import (
 )
 from app.core.exceptions import RiskCalculationError
 from app.core.logging import get_logger
+from app.fundamentals.fundamentals_service import FundamentalsService
+from app.macro.macro_service import MacroService
 from app.risk.risk_engine import DEFAULT_STOP_ATR_MULTIPLIER
 from app.services.scanner_service import ScannerService
-from app.signals.models import SignalResult, SignalType
+from app.signals.models import DipConfidence, SignalResult, SignalType
 
 logger = get_logger(__name__)
 
@@ -45,6 +60,10 @@ MAX_POSITION_ALLOCATION_FRACTION = 0.20  # hard cap on any position's cash share
 TRAILING_STOP_ATR_MULTIPLIER = DEFAULT_STOP_ATR_MULTIPLIER  # same distance the initial stop uses
 MAX_CONCURRENT_POSITIONS = 5
 MIN_TRADE_VALUE = 1.0  # skip a buy that would be smaller than this (dust)
+MAX_POSITIONS_PER_SECTOR = 2  # forces diversification even within the concurrent-position cap
+DIP_ENTRY_MIN_CONFIDENCE = DipConfidence.STRONG  # only the highest-confidence dips get a secondary entry
+_VIX_ELEVATED_THRESHOLD = 20.0  # -> halve new-position risk
+_VIX_HIGH_THRESHOLD = 30.0  # -> quarter new-position risk
 
 
 def _as_utc(dt: datetime) -> datetime:
@@ -62,12 +81,16 @@ class AutoTraderService:
         currency_symbol: str,
         scanner_service: ScannerService,
         tick_interval_seconds: float = 30.0,
+        fundamentals_service: FundamentalsService | None = None,
+        macro_service: MacroService | None = None,
     ) -> None:
         self._session_factory = session_factory
         self._market = market
         self._currency_symbol = currency_symbol
         self._scanner_service = scanner_service
         self._tick_interval = tick_interval_seconds
+        self._fundamentals_service = fundamentals_service
+        self._macro_service = macro_service
         self._task: asyncio.Task | None = None
         self._stopping = False
 
@@ -199,30 +222,77 @@ class AutoTraderService:
         return None
 
     def _process_entries(self, db: Session, run: SimulationRun) -> None:
-        open_count = db.execute(
+        open_positions = db.execute(
             select(SimulationPosition).where(SimulationPosition.run_id == run.id)
         ).scalars().all()
-        open_symbols = {p.symbol for p in open_count}
+        open_symbols = {p.symbol for p in open_positions}
         if len(open_symbols) >= MAX_CONCURRENT_POSITIONS:
             return
 
-        candidates = [
-            r for r in self._scanner_service.get_scan_results()
+        # Sector distribution of currently-open positions -- empty (so no
+        # cap is ever applied) when fundamentals data isn't available for
+        # this market (crypto) or hasn't arrived yet.
+        open_sectors: dict[str, int] = {}
+        if self._fundamentals_service is not None:
+            for p in open_positions:
+                sector = self._fundamentals_service.get_sector(p.symbol)
+                if sector:
+                    open_sectors[sector] = open_sectors.get(sector, 0) + 1
+
+        risk_multiplier = self._risk_multiplier_from_vix()
+        logger.info("[%s] autotrader risk_multiplier=%.2f (vix-derated)", self._market, risk_multiplier)
+
+        all_results = self._scanner_service.get_scan_results()
+        trend_candidates = [
+            r for r in all_results
             if r.signal in (SignalType.STRONG_BUY_SETUP, SignalType.BUY_SETUP)
             and r.symbol not in open_symbols
+            and r.daily_trend_up is not False
         ]
-        candidates.sort(key=lambda r: r.score, reverse=True)
+        trend_candidates.sort(key=lambda r: r.score, reverse=True)
+        trend_symbols = {r.symbol for r in trend_candidates}
+
+        # Secondary entry path: a STRONG mean-reversion dip can fire even
+        # when the trend-following signal isn't a buy setup (that's the
+        # whole point of DipOpportunity being separate -- see dip_detector.py).
+        # Still requires the daily trend not to be confirmed down, since
+        # "buying the dip" into a structural downtrend is the riskiest
+        # version of this trade.
+        dip_candidates = [
+            r for r in all_results
+            if r.dip_opportunity is not None
+            and r.dip_opportunity.confidence == DIP_ENTRY_MIN_CONFIDENCE
+            and r.symbol not in open_symbols
+            and r.symbol not in trend_symbols
+            and r.daily_trend_up is not False
+        ]
+
+        # Trend-based candidates get first claim on the limited slots; dip
+        # candidates only fill what's left over.
+        candidates = trend_candidates + dip_candidates
 
         for result in candidates:
             if len(open_symbols) >= MAX_CONCURRENT_POSITIONS:
                 break
+
+            sector = self._fundamentals_service.get_sector(result.symbol) if self._fundamentals_service else None
+            if sector and open_sectors.get(sector, 0) >= MAX_POSITIONS_PER_SECTOR:
+                continue
+
             detail = self._scanner_service.get_signal(result.symbol)
             stop_loss = detail.risk_analysis.stop_loss if detail and detail.risk_analysis else None
             take_profit = detail.risk_analysis.take_profit_1 if detail and detail.risk_analysis else None
 
-            allocation = self._position_size(run, result.price, stop_loss)
+            allocation = self._position_size(run, result.price, stop_loss, risk_multiplier)
             if allocation < MIN_TRADE_VALUE or allocation > run.cash:
                 continue
+
+            is_dip_entry = result.symbol not in trend_symbols
+            reason = (
+                f"Dip Fırsatı ({result.dip_opportunity.confidence.value} güven) — aşırı satım tepki alımı"
+                if is_dip_entry
+                else f"Sinyal {result.signal.value} (skor {result.score})"
+            )
 
             quantity = allocation / result.price
             run.cash -= allocation
@@ -242,28 +312,55 @@ class AutoTraderService:
                 action="BUY",
                 price=result.price,
                 quantity=quantity,
-                reason=f"Sinyal {result.signal.value} (skor {result.score})",
+                reason=reason,
                 realized_pnl=None,
                 timestamp=datetime.now(timezone.utc),
             ))
             open_symbols.add(result.symbol)
+            if sector:
+                open_sectors[sector] = open_sectors.get(sector, 0) + 1
             logger.info(
-                "[%s] simulation BUY %s x%.4f @ %.4f", self._market, result.symbol, quantity, result.price
+                "[%s] simulation BUY %s x%.4f @ %.4f (%s)",
+                self._market, result.symbol, quantity, result.price, reason,
             )
 
-    def _position_size(self, run: SimulationRun, entry_price: float, stop_loss: float | None) -> float:
+    def _risk_multiplier_from_vix(self) -> float:
+        """Derates new-position risk when the VIX is elevated -- purely a
+        trading-decision input, never fed into the Opportunity Score itself
+        (see app/macro/models.py). Fails open (1.0, no derating) whenever
+        macro data isn't wired up or VIX isn't in this market's indicator
+        list -- BIST's macro_indicators has no ^VIX today."""
+        if self._macro_service is None:
+            return 1.0
+        vix = next(
+            (i.price for i in self._macro_service.get_indicators() if i.symbol == "^VIX" and i.price is not None),
+            None,
+        )
+        if vix is None:
+            return 1.0
+        if vix >= _VIX_HIGH_THRESHOLD:
+            return 0.25
+        if vix >= _VIX_ELEVATED_THRESHOLD:
+            return 0.5
+        return 1.0
+
+    def _position_size(
+        self, run: SimulationRun, entry_price: float, stop_loss: float | None, risk_multiplier: float = 1.0
+    ) -> float:
         """Cash value to allocate to a new position. Risk-based: sized so
         that hitting the stop loses about the same dollar amount
-        (RISK_PER_TRADE_FRACTION of cash) regardless of the symbol -- a
-        volatile symbol with a stop far from entry gets fewer shares (a
-        smaller position) than a calm one, for the same risk. Falls back to
-        the flat MAX_POSITION_ALLOCATION_FRACTION cap when there's no usable
-        stop distance to size against (e.g. ATR unavailable yet)."""
+        (RISK_PER_TRADE_FRACTION of cash, scaled by risk_multiplier) regardless
+        of the symbol -- a volatile symbol with a stop far from entry gets
+        fewer shares (a smaller position) than a calm one, for the same risk.
+        Falls back to the flat MAX_POSITION_ALLOCATION_FRACTION cap when
+        there's no usable stop distance to size against (e.g. ATR unavailable
+        yet) -- that cap is already conservative, so it's deliberately left
+        unaffected by risk_multiplier."""
         max_position_value = run.cash * MAX_POSITION_ALLOCATION_FRACTION
         if stop_loss is None or stop_loss >= entry_price:
             return max_position_value
         risk_per_share = entry_price - stop_loss
-        risk_budget = run.cash * RISK_PER_TRADE_FRACTION
+        risk_budget = run.cash * RISK_PER_TRADE_FRACTION * risk_multiplier
         position_value_from_risk = (risk_budget / risk_per_share) * entry_price
         return min(position_value_from_risk, max_position_value)
 

@@ -114,6 +114,7 @@ class ScannerEngine:
         price = closes[-1]
 
         macd_result = macd(closes)
+        session_highs, session_lows, session_closes, session_volumes = _session_bars(state)
 
         return IndicatorSnapshot(
             symbol=symbol,
@@ -126,9 +127,39 @@ class ScannerEngine:
             macd=macd_result,
             atr14=atr(highs, lows, closes, 14),
             bollinger=bollinger_bands(closes, 20, 2.0),
-            vwap=vwap(highs, lows, closes, volumes),
+            vwap=vwap(session_highs, session_lows, session_closes, session_volumes),
             volume_ratio=volume_ratio(volumes[-1], volumes[:-1] or volumes, lookback=20),
             momentum_roc=momentum_roc(closes, 10),
             bars_available=len(closes),
             last_bar_time=state.timestamps[-1] if state.timestamps else None,
         )
+
+
+def _session_bars(state: SymbolState) -> tuple[list[float], list[float], list[float], list[float]]:
+    """VWAP is a session-anchored indicator by definition -- restricts the
+    rolling window to bars from the same UTC calendar day as the most recent
+    bar. Timestamps reaching SymbolState are always tz-aware UTC by the time
+    they get here (see MarketEvent/YFinanceProvider and main.py's seeding
+    path), and neither a US/BIST trading session nor a UTC day ever crosses
+    UTC midnight, so a plain UTC calendar-day filter is exact for those and a
+    reasonable, standard convention for 24/7 crypto. Falls back to the full
+    window (previous behavior) if no bars from "today" exist yet -- e.g. the
+    very first bar of a session -- so VWAP never silently disappears."""
+    timestamps = state.timestamps
+    highs = list(state.highs)
+    lows = list(state.lows)
+    closes = list(state.closes)
+    volumes = list(state.volumes)
+    if not timestamps or timestamps[-1] is None:
+        return highs, lows, closes, volumes
+
+    today = timestamps[-1].date()
+    idx = [i for i, ts in enumerate(timestamps) if ts is not None and ts.date() == today]
+    if not idx:
+        return highs, lows, closes, volumes
+    return (
+        [highs[i] for i in idx],
+        [lows[i] for i in idx],
+        [closes[i] for i in idx],
+        [volumes[i] for i in idx],
+    )

@@ -9,6 +9,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from app.autotrader.autotrader_service import AutoTraderService
+from app.daily_trend.daily_trend_service import DailyTrendService
 from app.fundamentals.fundamentals_service import FundamentalsService
 from app.macro.macro_service import MacroService
 from app.news.news_service import NewsService
@@ -31,4 +32,5 @@ class MarketContext:
     fundamentals_service: FundamentalsService | None = None
     macro_service: MacroService | None = None
     signal_tracking_service: SignalTrackingService | None = None
+    daily_trend_service: DailyTrendService | None = None
     note: str | None = None

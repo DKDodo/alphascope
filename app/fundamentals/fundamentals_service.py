@@ -76,6 +76,14 @@ class FundamentalsService:
         endpoints the rest of the app uses do not)."""
         return self._cycles_run >= 1 and not self._latest
 
+    def get_sector(self, symbol: str) -> str | None:
+        """Cheap sector lookup straight from the cache -- unlike
+        get_long_term_outlook(), this doesn't trigger a full long-term
+        scoring pass, so it's safe to call once per AutoTrader candidate on
+        every tick (see AutoTraderService's sector-diversification cap)."""
+        snapshot = self._latest.get(symbol.upper())
+        return snapshot.sector if snapshot else None
+
     def get_long_term_outlook(self, symbol: str) -> LongTermOutlook:
         symbol = symbol.upper()
         snapshot = self._latest.get(symbol)

@@ -34,6 +34,7 @@ from app.config import Settings, get_settings
 from app.core.events import AsyncEventBus
 from app.core.exceptions import ProviderNotConfiguredError, RiskCalculationError
 from app.core.logging import get_logger, setup_logging
+from app.daily_trend.daily_trend_service import DailyTrendService
 from app.fundamentals.fundamentals_service import FundamentalsService
 from app.macro.macro_service import MacroService
 from app.market_data.base import BaseMarketDataProvider
@@ -142,6 +143,15 @@ def _build_context(
     signal_engine = SignalEngine(risk_engine=RiskEngine())
     portfolio = PaperPortfolio(starting_cash=starting_cash)
 
+    # Built before ScannerService so it can be handed in directly — daily
+    # bars change slowly, so this is its own independently-polled service
+    # rather than something the scanner computes itself (see app/daily_trend/).
+    daily_trend_service = DailyTrendService(
+        symbols=universe.symbols,
+        ticker_suffix=news_ticker_suffix,
+        poll_interval_seconds=settings.daily_trend_poll_interval_seconds,
+    )
+
     market_service = MarketService(provider=provider, event_bus=event_bus, symbols=universe.symbols)
     scanner_service = ScannerService(
         event_bus=event_bus,
@@ -151,6 +161,7 @@ def _build_context(
         scan_interval_seconds=settings.scanner_interval_seconds,
         market_key=key,
         session_factory=db.session_factory,
+        daily_trend_service=daily_trend_service,
     )
 
     news_service = None
@@ -161,14 +172,6 @@ def _build_context(
             poll_interval_seconds=settings.news_poll_interval_seconds,
             max_items_per_symbol=settings.news_max_items_per_symbol,
         )
-
-    autotrader_service = AutoTraderService(
-        session_factory=db.session_factory,
-        market=key,
-        currency_symbol=currency_symbol,
-        scanner_service=scanner_service,
-        tick_interval_seconds=settings.autotrader_tick_interval_seconds,
-    )
 
     fundamentals_service = None
     if fundamentals_enabled:
@@ -194,6 +197,19 @@ def _build_context(
             day_reset_symbols=frozenset({"BTC-USD"}),
         )
 
+    # Built after fundamentals_service/macro_service so both can be handed
+    # in — AutoTrader uses sector data for diversification and VIX for
+    # risk-derated position sizing (see AutoTraderService._process_entries).
+    autotrader_service = AutoTraderService(
+        session_factory=db.session_factory,
+        market=key,
+        currency_symbol=currency_symbol,
+        scanner_service=scanner_service,
+        tick_interval_seconds=settings.autotrader_tick_interval_seconds,
+        fundamentals_service=fundamentals_service,
+        macro_service=macro_service,
+    )
+
     signal_tracking_service = SignalTrackingService(
         session_factory=db.session_factory,
         market=key,
@@ -213,6 +229,7 @@ def _build_context(
         fundamentals_service=fundamentals_service,
         macro_service=macro_service,
         signal_tracking_service=signal_tracking_service,
+        daily_trend_service=daily_trend_service,
         note=note,
     )
 
@@ -337,12 +354,16 @@ async def lifespan(app: FastAPI):
             await ctx.macro_service.start()
         if ctx.signal_tracking_service is not None:
             await ctx.signal_tracking_service.start()
+        if ctx.daily_trend_service is not None:
+            await ctx.daily_trend_service.start()
 
     try:
         yield
     finally:
         logger.info("shutting down alphascope")
         for ctx in contexts.values():
+            if ctx.daily_trend_service is not None:
+                await ctx.daily_trend_service.stop()
             if ctx.signal_tracking_service is not None:
                 await ctx.signal_tracking_service.stop()
             if ctx.macro_service is not None:

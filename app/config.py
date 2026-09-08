@@ -154,6 +154,13 @@ class Settings(BaseSettings):
         default=21_600.0, validation_alias="FUNDAMENTALS_POLL_INTERVAL_SECONDS"
     )
 
+    # How often to refresh each symbol's daily-bar (EMA50/EMA200) trend
+    # direction, used by AutoTrader as a multi-timeframe confirmation gate.
+    # Day-scale like fundamentals, so a slow poll is plenty.
+    daily_trend_poll_interval_seconds: float = Field(
+        default=21_600.0, validation_alias="DAILY_TREND_POLL_INTERVAL_SECONDS"
+    )
+
     # Matches the dashboard's own 60s macro-strip refresh (app.js) so the
     # displayed numbers actually change on most refreshes instead of only
     # every few cycles.

@@ -304,6 +304,11 @@ See `.env.example`. Key settings:
 - `app/fundamentals/` — long-term outlook: company fundamentals + long-term
   trend, scored separately from the short-term signal.
 - `app/macro/` — informational macro indicators (FX pairs, market indices).
+  Never scores a symbol, but VIX is read by `app/autotrader/` to derate new
+  position sizing when market-wide risk appetite is low.
+- `app/daily_trend/` — daily-bar (EMA50/EMA200) trend direction per symbol,
+  polled far less often than intraday bars. Used only as an AutoTrader entry
+  gate (see below), not by the short-term Opportunity Score.
 - `app/autotrader/` — self-driving N-day paper trading simulation, persisted
   to SQLite (`app/autotrader/db_models.py`) so a run survives a restart.
   Position sizing is risk-based (`RISK_PER_TRADE_FRACTION` of cash risked to
@@ -312,7 +317,15 @@ See `.env.example`. Key settings:
   position than a calm one for the same dollar risk. The stop-loss trails up
   (ATR distance from the current price) as a position gains, never back
   down, to lock in gains instead of giving back a whole reversal — visible
-  in the dashboard's simulation panel as "Zarar-Kes (İz Süren)".
+  in the dashboard's simulation panel as "Zarar-Kes (İz Süren)". At most
+  `MAX_POSITIONS_PER_SECTOR` open positions may share the same
+  fundamentals sector, forcing real diversification. A second entry path
+  opens on a STRONG `DipOpportunity` even without a trend-following buy
+  setup (trade-logged separately as "Dip Fırsatı"). Both entry paths require
+  the daily-bar trend (`app/daily_trend/`, EMA50 vs EMA200) not to be
+  confirmed down, and new-position risk is derated when VIX is elevated —
+  none of this touches the Opportunity Score itself, only which symbols the
+  simulation actually buys and how large those positions are.
 - `app/portfolio/` — virtual paper trading only.
 - `app/services/` — background tasks wiring the provider stream into the scanner,
   with reconnect/backoff so a provider outage never crashes the app.

@@ -193,3 +193,11 @@ def test_data_age_handles_naive_timestamps_without_crashing():
 
     assert result.data_age_seconds is not None
     assert 500 <= result.data_age_seconds <= 700  # ~10 minutes
+
+
+def test_daily_trend_up_passes_through_unchanged():
+    ind = _snapshot(price=100.0)
+
+    assert _engine().evaluate(ind, daily_trend_up=True).daily_trend_up is True
+    assert _engine().evaluate(ind, daily_trend_up=False).daily_trend_up is False
+    assert _engine().evaluate(ind).daily_trend_up is None

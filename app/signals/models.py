@@ -81,6 +81,9 @@ class SignalResult(BaseModel):
     # Separate mean-reversion read, independent of the trend-following score
     # above — see DipOpportunity's docstring for why these aren't merged.
     dip_opportunity: DipOpportunity | None = None
+    # Higher-timeframe (daily EMA50/EMA200) trend read, independent of the
+    # intraday score above — see AutoTraderService for how this gates entries.
+    daily_trend_up: bool | None = None
     timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     disclaimer: str = (
         "Sadece karar destek amaçlıdır. Yatırım tavsiyesi değildir. "
