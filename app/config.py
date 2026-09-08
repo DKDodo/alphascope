@@ -34,11 +34,17 @@ class Settings(BaseSettings):
     paper_trading_only: bool = Field(default=True, validation_alias="PAPER_TRADING_ONLY")
     live_trading_enabled: bool = Field(default=False, validation_alias="LIVE_TRADING_ENABLED")
 
+    # Free-tier hosts (e.g. Render's 0.1 CPU / 512MB plan) have very little
+    # headroom — recomputing every symbol's indicators every few seconds
+    # was found in production to starve the event loop badly enough that
+    # the host restarts the instance (which looks like a running simulation
+    # randomly "stopping"). These defaults trade a bit of freshness for
+    # actually staying up; override via .env for a beefier host.
     scanner_interval_seconds: float = Field(
-        default=5.0, validation_alias="SCANNER_INTERVAL_SECONDS"
+        default=20.0, validation_alias="SCANNER_INTERVAL_SECONDS"
     )
     mock_tick_interval_seconds: float = Field(
-        default=1.0, validation_alias="MOCK_TICK_INTERVAL_SECONDS"
+        default=3.0, validation_alias="MOCK_TICK_INTERVAL_SECONDS"
     )
     mock_random_seed: int | None = Field(default=42, validation_alias="MOCK_RANDOM_SEED")
 
@@ -82,7 +88,7 @@ class Settings(BaseSettings):
     )
 
     autotrader_tick_interval_seconds: float = Field(
-        default=30.0, validation_alias="AUTOTRADER_TICK_INTERVAL_SECONDS"
+        default=60.0, validation_alias="AUTOTRADER_TICK_INTERVAL_SECONDS"
     )
 
     fundamentals_poll_interval_seconds: float = Field(
