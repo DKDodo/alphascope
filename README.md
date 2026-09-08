@@ -113,9 +113,10 @@ kripto için de ayrı bir borsa entegrasyonu (ccxt vb.) yok, yfinance zaten
   Gerçek yatırım kararı vermeden önce fiyatı aracı kurumunuzdan/borsanızdan
   mutlaka teyit edin.
 - **Global (ABD):** Semboller uzantısız sorgulanır (örn. `AAPL`). Sembol
-  listesi: `.env` içindeki `GLOBAL_SYMBOLS` — varsayılan olarak 8 büyük ABD
-  hissesi (AAPL, MSFT, NVDA, AMD, META, TSLA, AMZN, GOOGL). Sorgu sıklığı:
-  `GLOBAL_POLL_INTERVAL_SECONDS` (varsayılan 60sn).
+  listesi: `.env` içindeki `GLOBAL_SYMBOLS` — varsayılan olarak teknoloji,
+  finans, sağlık, tüketim, enerji, telekom ve sanayi sektörlerine yayılmış
+  ~50 büyük/likit ABD şirketi (AAPL, MSFT, JPM, JNJ, WMT, XOM gibi). Sorgu
+  sıklığı: `GLOBAL_POLL_INTERVAL_SECONDS` (varsayılan 60sn).
 - **BIST 30:** Semboller `.IS` uzantısıyla sorgulanır (örn. `THYAO.IS`) ama
   sistemde ve arayüzde uzantısız gösterilir (`THYAO`). Sembol listesi: `.env`
   içindeki `BIST_SYMBOLS` — varsayılan olarak 30 büyük/likit BIST hissesi

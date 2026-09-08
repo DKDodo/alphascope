@@ -60,9 +60,23 @@ class Settings(BaseSettings):
     )
 
     # Global (ABD) tab — real, delayed Yahoo Finance data (no suffix needed
-    # for US tickers). Override GLOBAL_SYMBOLS via .env to track a different list.
+    # for US tickers). Override GLOBAL_SYMBOLS via .env to track a different
+    # list. Default is ~50 large/liquid, well-known US companies spread
+    # across sectors (tech, finance, healthcare, consumer, energy, telecom,
+    # industrials) rather than concentrated in one sector — same spirit as
+    # BIST_SYMBOLS, though this isn't tracking an official index the way
+    # "BIST 30" is, just a broad, recognizable selection.
     global_symbols: str = Field(
-        default="AAPL,MSFT,NVDA,AMD,META,TSLA,AMZN,GOOGL",
+        default=(
+            "AAPL,MSFT,NVDA,GOOGL,AMZN,META,AMD,ORCL,CRM,ADBE,INTC,CSCO,"
+            "NFLX,DIS,TMUS,JPM,V,MA,BAC,WFC,GS,MS,"
+            "JNJ,UNH,PFE,ABBV,MRK,"
+            "WMT,PG,KO,PEP,COST,HD,MCD,NKE,"
+            "TSLA,BA,CAT,GE,"
+            "XOM,CVX,COP,"
+            "VZ,T,"
+            "UBER,PYPL,SBUX,LOW,TXN,QCOM"
+        ),
         validation_alias="GLOBAL_SYMBOLS",
     )
     global_poll_interval_seconds: float = Field(
