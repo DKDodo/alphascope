@@ -17,9 +17,14 @@ class MacroService:
         self,
         indicators: list[tuple[str, str, str]],  # (symbol, label, description)
         poll_interval_seconds: float = 300.0,
+        day_reset_symbols: frozenset[str] = frozenset(),
     ) -> None:
         self._indicators = indicators
         self._poll_interval = poll_interval_seconds
+        # Symbols in here get a change % measured from today's 00:00 Turkey
+        # time instead of the previous daily close — for 24/7 assets (crypto)
+        # that have no exchange session to anchor a "previous close" to.
+        self._day_reset_symbols = day_reset_symbols
         self._latest: list[MacroIndicator] = []
         self._task: asyncio.Task | None = None
         self._stopping = False
@@ -47,7 +52,12 @@ class MacroService:
 
     async def _run_cycle(self) -> None:
         results = await asyncio.gather(
-            *[fetch_macro_indicator(symbol, label, desc) for symbol, label, desc in self._indicators]
+            *[
+                fetch_macro_indicator(
+                    symbol, label, desc, day_reset=symbol in self._day_reset_symbols
+                )
+                for symbol, label, desc in self._indicators
+            ]
         )
         fetched = [r for r in results if r is not None]
         if fetched:

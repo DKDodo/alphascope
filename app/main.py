@@ -168,6 +168,10 @@ def _build_context(
         macro_service = MacroService(
             indicators=macro_indicators,
             poll_interval_seconds=settings.macro_poll_interval_seconds,
+            # Bitcoin trades 24/7 — there's no exchange "previous close" to
+            # anchor its change % to, so it uses a Turkey-local day boundary
+            # instead (see macro_provider._fetch_day_start_change).
+            day_reset_symbols=frozenset({"BTC-USD"}),
         )
 
     return MarketContext(
