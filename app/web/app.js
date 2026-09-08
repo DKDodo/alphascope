@@ -997,6 +997,12 @@ function backtestSifirla() {
 
 document.getElementById("backtest-calistir-btn").addEventListener("click", backtestCalistir);
 
+if ("serviceWorker" in navigator) {
+  window.addEventListener("load", () => {
+    navigator.serviceWorker.register("/sw.js").catch((err) => console.error("Service worker kaydı başarısız:", err));
+  });
+}
+
 async function baslat() {
   await pazarlariYukle();
   tarayiciYenile();
