@@ -5,8 +5,14 @@ Design choices, made explicit because they directly shape the results:
 - Entry: opens a position on STRONG_BUY_SETUP or BUY_SETUP if a slot is free.
 - Exit: closes on stop-loss/take-profit being hit, or the signal dropping to
   AVOID, or the run's time window ending (mark-to-market close).
-- Sizing: a fixed fraction of current cash per new position (simple, not
-  risk-optimized) with a cap on concurrent positions to force diversification.
+- Sizing: risk-based (RISK_PER_TRADE_FRACTION of cash per trade, sized
+  inversely to the stop distance) capped by MAX_POSITION_ALLOCATION_FRACTION
+  -- a volatile/wide-ATR symbol gets fewer shares than a calm one for the
+  same dollar risk, rather than every symbol getting the same cash share
+  regardless of how far it could move against you. Concurrent-position cap
+  forces diversification (though not across sectors -- see README).
+- Stop-loss trails up (ATR distance from current price) as a position gains,
+  never back down: locks in gains instead of giving back a whole reversal.
 - Persisted to SQLite (see db_models.py) so the run survives a process
   restart — critical for a "7-day" claim to mean anything on a host that
   can sleep/redeploy.
@@ -28,12 +34,15 @@ from app.autotrader.models import (
 )
 from app.core.exceptions import RiskCalculationError
 from app.core.logging import get_logger
+from app.risk.risk_engine import DEFAULT_STOP_ATR_MULTIPLIER
 from app.services.scanner_service import ScannerService
-from app.signals.models import SignalType
+from app.signals.models import SignalResult, SignalType
 
 logger = get_logger(__name__)
 
-POSITION_ALLOCATION_FRACTION = 0.20  # fraction of *current* cash per new position
+RISK_PER_TRADE_FRACTION = 0.02  # max fraction of cash risked (to the stop) on a single new position
+MAX_POSITION_ALLOCATION_FRACTION = 0.20  # hard cap on any position's cash share, even if risk-sizing wants more
+TRAILING_STOP_ATR_MULTIPLIER = DEFAULT_STOP_ATR_MULTIPLIER  # same distance the initial stop uses
 MAX_CONCURRENT_POSITIONS = 5
 MIN_TRADE_VALUE = 1.0  # skip a buy that would be smaller than this (dust)
 
@@ -150,9 +159,23 @@ class AutoTraderService:
             signal = self._scanner_service.get_signal(position.symbol)
             if signal is None:
                 continue
+            self._update_trailing_stop(position, signal)
             reason = self._exit_reason(position, signal.price, signal.signal)
             if reason is not None:
                 self._sell(db, run, position, signal.price, reason)
+
+    def _update_trailing_stop(self, position: SimulationPosition, signal: SignalResult) -> None:
+        """Ratchets the stop up as price rises, never back down. Uses current
+        ATR (not the ATR at entry) so the trailing distance adapts if the
+        symbol's volatility changes while the position is open."""
+        if position.stop_loss is None or signal.risk_analysis is None:
+            return
+        atr = signal.risk_analysis.atr
+        if atr <= 0:
+            return
+        trailing_candidate = signal.price - atr * TRAILING_STOP_ATR_MULTIPLIER
+        if trailing_candidate > position.stop_loss:
+            position.stop_loss = trailing_candidate
 
     def _exit_reason(self, position: SimulationPosition, price: float, signal: SignalType) -> str | None:
         if position.stop_loss is not None and price <= position.stop_loss:
@@ -181,12 +204,13 @@ class AutoTraderService:
         for result in candidates:
             if len(open_symbols) >= MAX_CONCURRENT_POSITIONS:
                 break
-            allocation = run.cash * POSITION_ALLOCATION_FRACTION
-            if allocation < MIN_TRADE_VALUE or allocation > run.cash:
-                continue
             detail = self._scanner_service.get_signal(result.symbol)
             stop_loss = detail.risk_analysis.stop_loss if detail and detail.risk_analysis else None
             take_profit = detail.risk_analysis.take_profit_1 if detail and detail.risk_analysis else None
+
+            allocation = self._position_size(run, result.price, stop_loss)
+            if allocation < MIN_TRADE_VALUE or allocation > run.cash:
+                continue
 
             quantity = allocation / result.price
             run.cash -= allocation
@@ -214,6 +238,22 @@ class AutoTraderService:
             logger.info(
                 "[%s] simulation BUY %s x%.4f @ %.4f", self._market, result.symbol, quantity, result.price
             )
+
+    def _position_size(self, run: SimulationRun, entry_price: float, stop_loss: float | None) -> float:
+        """Cash value to allocate to a new position. Risk-based: sized so
+        that hitting the stop loses about the same dollar amount
+        (RISK_PER_TRADE_FRACTION of cash) regardless of the symbol -- a
+        volatile symbol with a stop far from entry gets fewer shares (a
+        smaller position) than a calm one, for the same risk. Falls back to
+        the flat MAX_POSITION_ALLOCATION_FRACTION cap when there's no usable
+        stop distance to size against (e.g. ATR unavailable yet)."""
+        max_position_value = run.cash * MAX_POSITION_ALLOCATION_FRACTION
+        if stop_loss is None or stop_loss >= entry_price:
+            return max_position_value
+        risk_per_share = entry_price - stop_loss
+        risk_budget = run.cash * RISK_PER_TRADE_FRACTION
+        position_value_from_risk = (risk_budget / risk_per_share) * entry_price
+        return min(position_value_from_risk, max_position_value)
 
     def _sell(self, db: Session, run: SimulationRun, position: SimulationPosition, price: float, reason: str) -> None:
         proceeds = position.quantity * price

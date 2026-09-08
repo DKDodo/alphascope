@@ -113,6 +113,7 @@ function pazarDegistir(anahtar) {
   portfoyYenile();
   simulasyonYenile();
   makroYenile();
+  sinyalPerformansiYenile();
 }
 
 async function makroYenile() {
@@ -671,8 +672,9 @@ function renderSimulasyon(sim) {
           <td>${birim} ${paraFormat(p.average_price)}</td>
           <td>${p.current_price !== null ? birim + " " + paraFormat(p.current_price) : "-"}</td>
           <td class="${(p.unrealized_pnl ?? 0) >= 0 ? "pnl-pos" : "pnl-neg"}">${p.unrealized_pnl !== null ? birim + " " + paraFormat(p.unrealized_pnl) : "-"}</td>
+          <td>${p.stop_loss !== null && p.stop_loss !== undefined ? birim + " " + paraFormat(p.stop_loss) : "-"}</td>
         </tr>`).join("")
-    : '<tr><td colspan="5" class="empty-row">Açık pozisyon yok.</td></tr>';
+    : '<tr><td colspan="6" class="empty-row">Açık pozisyon yok.</td></tr>';
 
   const islemSatirlari = sim.recent_trades.length
     ? sim.recent_trades.map((t) => `
@@ -701,7 +703,7 @@ function renderSimulasyon(sim) {
       <div class="stat"><span class="stat-label">İşlem Sayısı</span><span class="stat-value">${sim.trade_count}</span></div>
     </div>
     <table class="portfolio-table">
-      <thead><tr><th>Sembol</th><th>Adet</th><th>Ort. Maliyet</th><th>Güncel Fiyat</th><th>K/Z</th></tr></thead>
+      <thead><tr><th>Sembol</th><th>Adet</th><th>Ort. Maliyet</th><th>Güncel Fiyat</th><th>K/Z</th><th>Zarar-Kes (İz Süren)</th></tr></thead>
       <tbody>${pozisyonSatirlari}</tbody>
     </table>
     <div class="sim-trades-table">
@@ -744,12 +746,77 @@ async function simulasyonBaslat() {
   }
 }
 
+const SINYAL_SIRALAMA = ["STRONG_BUY_SETUP", "BUY_SETUP", "WATCH", "NEUTRAL", "AVOID"];
+const HORIZON_SIRALAMA = [5, 10, 20];
+
+async function sinyalPerformansiYenile() {
+  if (!aktifPazar) return;
+  const kutu = document.getElementById("sinyal-performans-icerik");
+  try {
+    const veri = await veriCek(`/api/${aktifPazar}/signal-performance`);
+    renderSinyalPerformansi(veri);
+  } catch (err) {
+    kutu.innerHTML = '<p class="detail-empty">Sinyal performansı yüklenemedi.</p>';
+  }
+}
+
+function renderSinyalPerformansi(veri) {
+  const kutu = document.getElementById("sinyal-performans-icerik");
+
+  if (!veri.length) {
+    kutu.innerHTML = `
+      <p class="detail-empty" style="text-align:left;">
+        Sistem, her sinyal değişiminde bunu kaydedip 5/10/20 gün sonra fiyatla karşılaştırıyor —
+        "STRONG_BUY_SETUP dediklerimiz gerçekten yükseliyor mu?" sorusuna kendi geçmişinden cevap
+        vermesi için. En az 3 örneği biriken sinyal/süre kombinasyonları burada görünecek —
+        henüz yeterli geçmiş yok.
+      </p>`;
+    return;
+  }
+
+  const harita = {};
+  for (const satir of veri) {
+    harita[satir.signal] = harita[satir.signal] || {};
+    harita[satir.signal][satir.horizon_days] = satir;
+  }
+
+  const satirlarHtml = SINYAL_SIRALAMA.filter((s) => harita[s])
+    .map((sinyal) => {
+      const hucreler = HORIZON_SIRALAMA.map((h) => {
+        const hucre = harita[sinyal][h];
+        if (!hucre) return `<td class="detail-empty">—</td>`;
+        const sinif = hucre.avg_return_pct >= 0 ? "pnl-pos" : "pnl-neg";
+        return `<td class="${sinif}">%${paraFormat(hucre.avg_return_pct)} <span style="color:var(--muted);font-size:11px;">(n=${hucre.sample_count})</span></td>`;
+      }).join("");
+      return `
+        <tr>
+          <td><span class="badge badge-${sinyal}">${SINYAL_ETIKET[sinyal] || sinyal}</span></td>
+          ${hucreler}
+        </tr>`;
+    })
+    .join("");
+
+  kutu.innerHTML = `
+    <p class="detail-empty" style="text-align:left;">
+      Her sinyal ilk oluştuğunda kaydedilir; belirtilen gün sayısı sonra fiyatla karşılaştırılıp
+      ortalama getiri hesaplanır. En az 3 örneği olmayan kombinasyonlar gösterilmez.
+    </p>
+    <table class="portfolio-table">
+      <thead><tr><th>Sinyal</th><th>5 Gün Sonra</th><th>10 Gün Sonra</th><th>20 Gün Sonra</th></tr></thead>
+      <tbody>${satirlarHtml}</tbody>
+    </table>
+    <p class="detail-empty" style="text-align:left;margin-top:10px;">
+      Geçmiş performans gelecekteki sonuçları garanti etmez. Bu bir yatırım tavsiyesi değildir.
+    </p>`;
+}
+
 async function baslat() {
   await pazarlariYukle();
   tarayiciYenile();
   portfoyYenile();
   simulasyonYenile();
   makroYenile();
+  sinyalPerformansiYenile();
 }
 
 baslat();
@@ -757,6 +824,7 @@ setInterval(tarayiciYenile, 5000);
 setInterval(portfoyYenile, 5000);
 setInterval(simulasyonYenile, 5000);
 setInterval(makroYenile, 60000);
+setInterval(sinyalPerformansiYenile, 300000); // gün-bazlı veri, sık yenilemeye gerek yok
 setInterval(() => {
   if (secilenSembol) detaySessizYenile();
 }, 5000);

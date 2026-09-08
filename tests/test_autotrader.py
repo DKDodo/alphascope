@@ -89,7 +89,9 @@ def test_tick_buys_on_strong_signal(session_factory, scanner):
     assert status.trade_count == 1
     assert len(status.positions) == 1
     assert status.positions[0].symbol == "AAPL"
-    assert status.cash == pytest.approx(10_000.0 * 0.8)  # 20% allocated
+    # risk-based sizing wants (cash*2%)/risk_per_share*price = 4000 here,
+    # which exceeds the flat 20% cap (2000) -- so it hits the cap instead.
+    assert status.cash == pytest.approx(10_000.0 * 0.8)
 
 
 def test_tick_sells_on_stop_loss_hit(session_factory, scanner):
@@ -160,3 +162,72 @@ def test_no_active_run_status_is_not_started(session_factory, scanner):
     svc = _service(session_factory, scanner)
     status = svc.get_status()
     assert status.status.value == "NOT_STARTED"
+
+
+def test_position_sizing_scales_inversely_with_stop_distance(session_factory, scanner):
+    svc = _service(session_factory, scanner)
+    svc.start_run(initial_cash=10_000.0, duration_days=7.0)
+    # Tight stop (risk_per_share=5) -- risk-based sizing wants 4000, capped
+    # at the flat 20% (2000 of the 10,000 starting cash).
+    scanner.set_signal("TIGHT", SignalType.STRONG_BUY_SETUP, price=100.0, stop_loss=95.0, score=90)
+    # Wide stop (risk_per_share=20, i.e. more volatile) -- risk-based sizing
+    # wants a smaller position, well under the cap either way.
+    scanner.set_signal("WIDE", SignalType.STRONG_BUY_SETUP, price=100.0, stop_loss=80.0, score=80)
+
+    svc._tick_sync()
+
+    status = svc.get_status()
+    positions = {p.symbol: p for p in status.positions}
+    # TIGHT is processed first (higher score), sized against the full 10,000.
+    assert positions["TIGHT"].quantity * 100.0 == pytest.approx(2000.0)
+    # WIDE is processed second, against the remaining 8,000 cash: risk_budget
+    # = 8000*2% = 160, quantity = 160/20 = 8, value = 800 -- a much smaller
+    # position than TIGHT's, because it's more volatile (wider stop).
+    assert positions["WIDE"].quantity * 100.0 == pytest.approx(800.0)
+
+
+def test_position_sizing_falls_back_to_flat_cap_without_a_stop(session_factory, scanner):
+    svc = _service(session_factory, scanner)
+    svc.start_run(initial_cash=10_000.0, duration_days=7.0)
+    scanner.set_signal("AAPL", SignalType.STRONG_BUY_SETUP, price=100.0)  # no stop_loss given
+
+    svc._tick_sync()
+
+    status = svc.get_status()
+    assert status.positions[0].quantity * 100.0 == pytest.approx(2000.0)  # flat 20% cap
+
+
+def test_trailing_stop_ratchets_up_as_price_rises(session_factory, scanner):
+    svc = _service(session_factory, scanner)
+    svc.start_run(initial_cash=10_000.0, duration_days=7.0)
+    scanner.set_signal("AAPL", SignalType.STRONG_BUY_SETUP, price=100.0, stop_loss=95.0, take_profit_1=200.0)
+    svc._tick_sync()  # buys at 100, initial stop=95
+
+    # Price rises well past entry -- the fake's ATR is 1.0, so the trailing
+    # candidate is 110 - 1.5*1.0 = 108.5, above the original 95.
+    scanner.set_signal("AAPL", SignalType.BUY_SETUP, price=110.0, stop_loss=95.0, take_profit_1=200.0)
+    svc._tick_sync()
+
+    status = svc.get_status()
+    assert len(status.positions) == 1
+    assert status.positions[0].stop_loss == pytest.approx(108.5)
+
+
+def test_trailing_stop_never_moves_down(session_factory, scanner):
+    svc = _service(session_factory, scanner)
+    svc.start_run(initial_cash=10_000.0, duration_days=7.0)
+    scanner.set_signal("AAPL", SignalType.STRONG_BUY_SETUP, price=100.0, stop_loss=95.0, take_profit_1=200.0)
+    svc._tick_sync()  # buys at 100, stop=95
+
+    scanner.set_signal("AAPL", SignalType.BUY_SETUP, price=110.0, stop_loss=95.0, take_profit_1=200.0)
+    svc._tick_sync()  # stop trails up to 108.5
+
+    # Price dips slightly but stays above the trailed stop (no exit).
+    # Trailing candidate here would be 109 - 1.5 = 107.5, BELOW the
+    # already-ratcheted 108.5 -- the stop must not move back down.
+    scanner.set_signal("AAPL", SignalType.BUY_SETUP, price=109.0, stop_loss=95.0, take_profit_1=200.0)
+    svc._tick_sync()
+
+    status = svc.get_status()
+    assert len(status.positions) == 1
+    assert status.positions[0].stop_loss == pytest.approx(108.5)

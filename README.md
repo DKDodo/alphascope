@@ -229,10 +229,32 @@ Her sinyal, sadece "kaç puan" değil **neden** o puanı aldığını gösterir:
   şeyler görmesidir. Güven seviyesi (`confidence`: `STRONG`/`MEDIUM`/`WEAK`)
   hacim onayının gücüne göre belirlenir.
 
+## Sinyal performansı (kendi geçmişinden öğrenme)
+
+`scoring.py`'deki kurallar (RSI 45-65 "sağlıklı", EMA sıralaması vb.) genel
+kabul görmüş teknik analiz kalıpları ama hiçbir zaman geriye dönük olarak
+doğrulanmadı — sistem "STRONG_BUY_SETUP dediğim semboller gerçekten daha
+iyi performans gösteriyor mu?" sorusuna cevap veremiyordu. Bunu çözmek için:
+
+- Bir sembolün sinyali **değiştiği** her anda (aynı sinyal sürdüğü sürece
+  değil, sadece gerçek bir değişimde) bu an, o anki fiyatla birlikte
+  kaydedilir — `app/signals/tracking_repository.py`.
+- 5, 10 ve 20 gün sonra (`app/signals/signal_tracking_service.py`, saatlik
+  kontrol), o kayıt için güncel fiyat bulunup getiri % hesaplanır.
+- Dashboard'daki **Sinyal Performansı** paneli, her sinyal tipi × süre için
+  ortalama getiriyi gösterir — ama **en az 3 örneği** olmayan kombinasyonlar
+  hiç gösterilmez (tek bir gözlemi "istatistik" gibi sunmamak için).
+- Bu, backtesting değildir (geçmişe gitmez, sadece ileri doğru gerçek
+  veriyle birikir) — ama zaman içinde birikince, aynı altyapı gerçek bir
+  geçmişe-dönük backtesting için de temel oluşturabilir.
+- `GET /api/{market}/signal-performance` uç noktasından da okunabilir.
+  **Geçmiş performans gelecekteki sonuçları garanti etmez; bu bir yatırım
+  tavsiyesi değildir.**
+
 ## API endpoints
 
 Tüm tarayıcı/sinyal/haber/portföy uç noktaları `{market}` parametresi alır
-(`global` veya `bist`):
+(`global`, `bist` veya `crypto`):
 
 - `GET /health` — liveness check.
 - `GET /api/markets` — mevcut piyasaların listesi (anahtar, etiket, para birimi, not).
@@ -283,6 +305,13 @@ See `.env.example`. Key settings:
 - `app/macro/` — informational macro indicators (FX pairs, market indices).
 - `app/autotrader/` — self-driving N-day paper trading simulation, persisted
   to SQLite (`app/autotrader/db_models.py`) so a run survives a restart.
+  Position sizing is risk-based (`RISK_PER_TRADE_FRACTION` of cash risked to
+  the stop distance, capped by `MAX_POSITION_ALLOCATION_FRACTION`) rather
+  than a flat percentage — a volatile/wide-stop symbol gets a smaller
+  position than a calm one for the same dollar risk. The stop-loss trails up
+  (ATR distance from the current price) as a position gains, never back
+  down, to lock in gains instead of giving back a whole reversal — visible
+  in the dashboard's simulation panel as "Zarar-Kes (İz Süren)".
 - `app/portfolio/` — virtual paper trading only.
 - `app/services/` — background tasks wiring the provider stream into the scanner,
   with reconnect/backoff so a provider outage never crashes the app.
