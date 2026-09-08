@@ -15,6 +15,7 @@ from app.news.news_service import NewsService
 from app.scanner.universe import Universe
 from app.services.market_service import MarketService
 from app.services.scanner_service import ScannerService
+from app.signals.signal_tracking_service import SignalTrackingService
 
 
 @dataclass
@@ -29,4 +30,5 @@ class MarketContext:
     autotrader_service: AutoTraderService | None = None
     fundamentals_service: FundamentalsService | None = None
     macro_service: MacroService | None = None
+    signal_tracking_service: SignalTrackingService | None = None
     note: str | None = None

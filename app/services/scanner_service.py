@@ -12,6 +12,7 @@ from app.market_data.models import EventType, MarketEvent
 from app.portfolio.paper_portfolio import PaperPortfolio
 from app.scanner import bar_repository
 from app.scanner.scanner_engine import ScannerEngine
+from app.signals import tracking_repository
 from app.signals.models import SignalResult
 from app.signals.signal_engine import SignalEngine
 
@@ -110,10 +111,32 @@ class ScannerService:
                 continue
             result = self._signal_engine.evaluate(indicators)
             if result is not None:
+                self._track_signal_change(symbol, result)
                 results[symbol] = result
         if results:
             self._latest_results = results
             logger.info("scan cycle complete: %d symbols evaluated", len(results))
+
+    def _track_signal_change(self, symbol: str, result: SignalResult) -> None:
+        """Records a new tracked-signal row the moment a symbol's signal
+        actually changes (not every scan cycle, which would flood the table
+        with duplicates of a signal that's held steady for hours) -- see
+        app/signals/signal_tracking_service.py for how these rows later get
+        their N-days-later outcome filled in."""
+        if self._session_factory is None or self._market_key is None:
+            return
+        previous = self._latest_results.get(symbol)
+        if previous is not None and previous.signal == result.signal:
+            return
+        tracking_repository.record_signal_change(
+            self._session_factory,
+            self._market_key,
+            symbol,
+            result.signal.value,
+            result.score,
+            result.price,
+            result.timestamp,
+        )
 
     def get_scan_results(self) -> list[SignalResult]:
         return list(self._latest_results.values())

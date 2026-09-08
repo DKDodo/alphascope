@@ -130,6 +130,12 @@ class Settings(BaseSettings):
         default=60.0, validation_alias="AUTOTRADER_TICK_INTERVAL_SECONDS"
     )
 
+    # How often to check for due signal-performance checkpoints (5/10/20
+    # days after a signal change). These are day-scale, so hourly is plenty.
+    signal_tracking_interval_seconds: float = Field(
+        default=3_600.0, validation_alias="SIGNAL_TRACKING_INTERVAL_SECONDS"
+    )
+
     fundamentals_poll_interval_seconds: float = Field(
         default=21_600.0, validation_alias="FUNDAMENTALS_POLL_INTERVAL_SECONDS"
     )

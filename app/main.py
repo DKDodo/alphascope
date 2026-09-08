@@ -25,6 +25,7 @@ from app.api.routes import (
     portfolio,
     risk,
     scanner,
+    signal_performance,
     signals,
     simulation,
 )
@@ -49,6 +50,7 @@ from app.services.market_context import MarketContext
 from app.services.market_service import MarketService
 from app.services.scanner_service import ScannerService
 from app.signals.signal_engine import SignalEngine
+from app.signals.signal_tracking_service import SignalTrackingService
 from app.storage.database import Database
 
 logger = get_logger(__name__)
@@ -192,6 +194,13 @@ def _build_context(
             day_reset_symbols=frozenset({"BTC-USD"}),
         )
 
+    signal_tracking_service = SignalTrackingService(
+        session_factory=db.session_factory,
+        market=key,
+        scanner_service=scanner_service,
+        tick_interval_seconds=settings.signal_tracking_interval_seconds,
+    )
+
     return MarketContext(
         key=key,
         label=label,
@@ -203,6 +212,7 @@ def _build_context(
         autotrader_service=autotrader_service,
         fundamentals_service=fundamentals_service,
         macro_service=macro_service,
+        signal_tracking_service=signal_tracking_service,
         note=note,
     )
 
@@ -325,12 +335,16 @@ async def lifespan(app: FastAPI):
             await ctx.fundamentals_service.start()
         if ctx.macro_service is not None:
             await ctx.macro_service.start()
+        if ctx.signal_tracking_service is not None:
+            await ctx.signal_tracking_service.start()
 
     try:
         yield
     finally:
         logger.info("shutting down alphascope")
         for ctx in contexts.values():
+            if ctx.signal_tracking_service is not None:
+                await ctx.signal_tracking_service.stop()
             if ctx.macro_service is not None:
                 await ctx.macro_service.stop()
             if ctx.fundamentals_service is not None:
@@ -372,6 +386,7 @@ def create_app() -> FastAPI:
     app.include_router(market.router)
     app.include_router(scanner.router)
     app.include_router(signals.router)
+    app.include_router(signal_performance.router)
     app.include_router(news.router)
     app.include_router(fundamentals.router)
     app.include_router(macro.router)
