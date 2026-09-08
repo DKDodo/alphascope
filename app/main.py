@@ -132,6 +132,7 @@ def _build_context(
     news_ticker_suffix: str = "",
     macro_indicators: list[tuple[str, str, str]] | None = None,
     note: str | None = None,
+    fundamentals_enabled: bool = True,
 ) -> MarketContext:
     event_bus: AsyncEventBus[MarketEvent] = AsyncEventBus()
     scanner_engine = ScannerEngine()
@@ -167,12 +168,18 @@ def _build_context(
         tick_interval_seconds=settings.autotrader_tick_interval_seconds,
     )
 
-    fundamentals_service = FundamentalsService(
-        symbols=universe.symbols,
-        scanner_engine=scanner_engine,
-        ticker_suffix=news_ticker_suffix,
-        poll_interval_seconds=settings.fundamentals_poll_interval_seconds,
-    )
+    fundamentals_service = None
+    if fundamentals_enabled:
+        # P/E, profit margin, ROE etc. describe a company's balance sheet —
+        # meaningless for crypto, which has no issuing company, so this is
+        # skipped entirely for that context rather than fetching and
+        # discarding data that could never mean anything there.
+        fundamentals_service = FundamentalsService(
+            symbols=universe.symbols,
+            scanner_engine=scanner_engine,
+            ticker_suffix=news_ticker_suffix,
+            poll_interval_seconds=settings.fundamentals_poll_interval_seconds,
+        )
 
     macro_service = None
     if macro_indicators:
@@ -205,10 +212,12 @@ async def lifespan(app: FastAPI):
     settings = get_settings()
     setup_logging(settings.log_level)
     logger.info(
-        "starting alphascope (env=%s, provider=%s, bist_enabled=%s, paper_trading_only=%s, live_trading_enabled=%s)",
+        "starting alphascope (env=%s, provider=%s, bist_enabled=%s, crypto_enabled=%s, "
+        "paper_trading_only=%s, live_trading_enabled=%s)",
         settings.environment,
         settings.market_data_provider,
         settings.bist_enabled,
+        settings.crypto_enabled,
         settings.paper_trading_only,
         settings.live_trading_enabled,
     )
@@ -268,6 +277,38 @@ async def lifespan(app: FastAPI):
                 "Yahoo Finance verisi kullanılıyor; fiyatlar yaklaşık 15-20 dakika "
                 "gecikmeli olabilir. Gerçek zamanlı emir kararları için aracı "
                 "kurumunuzun kendi verisini mutlaka teyit edin."
+            ),
+        )
+
+    if settings.crypto_enabled:
+        crypto_universe = Universe(symbols=settings.crypto_symbol_list, exchange="CRYPTO")
+        contexts["crypto"] = _build_context(
+            key="crypto",
+            label="Kripto",
+            currency_symbol="$",
+            universe=crypto_universe,
+            provider=YFinanceProvider(
+                symbols=crypto_universe.symbols,
+                exchange="CRYPTO",
+                poll_interval_seconds=settings.crypto_poll_interval_seconds,
+                ticker_suffix="-USD",
+            ),
+            settings=settings,
+            starting_cash=settings.crypto_initial_paper_cash,
+            db=db,
+            news_ticker_suffix="-USD",
+            fundamentals_enabled=False,
+            macro_indicators=[
+                ("^GSPC", "S&P 500", "Genel risk iştahı — kripto genelde bununla korele hareket eder"),
+                ("^VIX", "VIX (Volatilite Endeksi)", "Piyasa risk iştahı — yüksek VIX daha temkinli olun demektir"),
+                *_COMMON_MACRO_INDICATORS,
+            ],
+            note=(
+                "Yahoo Finance verisi kullanılıyor. Kripto piyasası 7/24 açıktır — "
+                "diğer sekmelerden farklı olarak veri uzun süre eskiyorsa bu piyasanın "
+                "kapalı olmasıyla açıklanamaz, veri akışında bir aksama olabilir. "
+                "Gerçek zamanlı emir kararları için kullandığınız borsanın kendi "
+                "verisini mutlaka teyit edin."
             ),
         )
 

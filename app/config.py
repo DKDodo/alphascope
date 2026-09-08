@@ -98,6 +98,26 @@ class Settings(BaseSettings):
     def bist_symbol_list(self) -> list[str]:
         return [s.strip().upper() for s in self.bist_symbols.split(",") if s.strip()]
 
+    # Crypto tab — same YFinanceProvider as Global/BIST (yfinance covers
+    # crypto via a "-USD" suffix, e.g. BTC-USD), no separate exchange
+    # integration needed. Trades 24/7, so unlike BIST/Global there's no
+    # "market closed" excuse for stale data — see SignalEngine's staleness check.
+    crypto_enabled: bool = Field(default=True, validation_alias="CRYPTO_ENABLED")
+    crypto_symbols: str = Field(
+        default="BTC,ETH,BNB,SOL,XRP,ADA,DOGE,AVAX",
+        validation_alias="CRYPTO_SYMBOLS",
+    )
+    crypto_poll_interval_seconds: float = Field(
+        default=60.0, validation_alias="CRYPTO_POLL_INTERVAL_SECONDS"
+    )
+    crypto_initial_paper_cash: float = Field(
+        default=100_000.0, validation_alias="CRYPTO_INITIAL_PAPER_CASH"
+    )
+
+    @property
+    def crypto_symbol_list(self) -> list[str]:
+        return [s.strip().upper() for s in self.crypto_symbols.split(",") if s.strip()]
+
     news_enabled: bool = Field(default=True, validation_alias="NEWS_ENABLED")
     news_poll_interval_seconds: float = Field(
         default=900.0, validation_alias="NEWS_POLL_INTERVAL_SECONDS"

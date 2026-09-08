@@ -96,19 +96,22 @@ kullanır; BIST sekmesi ve haberler Yahoo Finance'e erişim gerektirir). Bu
 dashboard, PyInstaller ile paketlenen `AlphaScope.exe` içine de otomatik
 olarak dahil edilir.
 
-## Global (ABD) ve BIST 30 sekmeleri
+## Global (ABD), BIST 30 ve Kripto sekmeleri
 
 `MarketContext` mimarisi sayesinde her piyasa diğerinden tamamen bağımsız bir
 "piyasa" olarak çalışır — kendi provider'ı, kendi tarayıcı durumu ve kendi
-kağıt portföyü (Global: $, BIST: ₺) vardır; biri çökse/yavaşlasa diğerini
-etkilemez. Her iki sekme de **aynı gerçek veri kaynağını** kullanır:
-Yahoo Finance (`yfinance` paketi, `YFinanceProvider`,
-`app/market_data/providers/yfinance_provider.py`), API anahtarı gerekmez.
+kağıt portföyü (Global/Kripto: $, BIST: ₺) vardır; biri çökse/yavaşlasa
+diğerini etkilemez. Üçü de **aynı gerçek veri kaynağını** kullanır: Yahoo
+Finance (`yfinance` paketi, `YFinanceProvider`,
+`app/market_data/providers/yfinance_provider.py`), API anahtarı gerekmez —
+kripto için de ayrı bir borsa entegrasyonu (ccxt vb.) yok, yfinance zaten
+`BTC-USD` gibi `-USD` uzantılı kripto sembollerini destekliyor.
 
 - **⚠️ Önemli — gecikme:** Yahoo Finance verisi genellikle **~15-20 dakika
-  gecikmelidir** ve bir aracı kurumun gerçek zamanlı emir akışının yerini
-  tutmaz. Dashboard'da her iki sekmenin üstünde bu uyarı her zaman görünür.
-  Gerçek yatırım kararı vermeden önce fiyatı aracı kurumunuzdan mutlaka teyit edin.
+  gecikmelidir** ve bir aracı kurumun/borsanın gerçek zamanlı emir akışının
+  yerini tutmaz. Dashboard'da her sekmenin üstünde bu uyarı her zaman görünür.
+  Gerçek yatırım kararı vermeden önce fiyatı aracı kurumunuzdan/borsanızdan
+  mutlaka teyit edin.
 - **Global (ABD):** Semboller uzantısız sorgulanır (örn. `AAPL`). Sembol
   listesi: `.env` içindeki `GLOBAL_SYMBOLS` — varsayılan olarak 8 büyük ABD
   hissesi (AAPL, MSFT, NVDA, AMD, META, TSLA, AMZN, GOOGL). Sorgu sıklığı:
@@ -120,16 +123,26 @@ Yahoo Finance (`yfinance` paketi, `YFinanceProvider`,
   olmayabilir** (endeks üyeliği periyodik değişir). Sorgu sıklığı:
   `BIST_POLL_INTERVAL_SECONDS` (varsayılan 60sn). BIST sekmesini tamamen
   kapatmak isterseniz `.env`'de `BIST_ENABLED=false`.
-- Farklı hisse takip etmek için ilgili `.env` değişkenindeki virgülle ayrılmış
-  listeyi düzenlemeniz yeterli, kod değişikliği gerekmez.
+- **Kripto:** Semboller `-USD` uzantısıyla sorgulanır (örn. `BTC-USD`) ama
+  arayüzde uzantısız gösterilir (`BTC`). Sembol listesi: `.env` içindeki
+  `CRYPTO_SYMBOLS` — varsayılan olarak 8 büyük kripto para (BTC, ETH, BNB,
+  SOL, XRP, ADA, DOGE, AVAX). Sorgu sıklığı: `CRYPTO_POLL_INTERVAL_SECONDS`
+  (varsayılan 60sn). Kripto piyasası 7/24 açık olduğu için, diğer iki
+  sekmenin aksine **"piyasa kapalı" bir mazeret değildir** — veri uzun süre
+  eskirse (bkz. Veri tazeliği aşağıda) bu bir aksama işareti olabilir. Temel
+  analiz (F/K, kâr marjı vb.) kripto için anlamsız olduğundan bu sekmede
+  gösterilmez. Kapatmak isterseniz `.env`'de `CRYPTO_ENABLED=false`.
+- Farklı sembol takip etmek için ilgili `.env` değişkenindeki virgülle
+  ayrılmış listeyi düzenlemeniz yeterli, kod değişikliği gerekmez.
 - Veri zaten gecikmeli olduğundan sorgu aralığını çok düşürmenin faydası
   yoktur; gereksiz sorgu Yahoo tarafından geçici olarak sınırlanmanıza
   (rate limit) yol açabilir.
-- **Bar birikimi:** Her iki sekme de EMA200 gibi uzun pencereli göstergeler
+- **Bar birikimi:** Her sekme de EMA200 gibi uzun pencereli göstergeler
   için canlı piyasa saatlerinde biriken ~200 bar'a ihtiyaç duyar (bkz.
   `bars_available` alanı, sembol detayında gösterilir). Piyasa kapalıyken
   (örn. ABD borsası kapandığında Global için, ya da gece BIST için) yeni bar
-  gelmez — bu bir hata değildir, normaldir. Bu birikim `app/scanner/db_models.py`
+  gelmez — bu bir hata değildir, normaldir (Kripto hariç: o piyasa hiç kapanmaz).
+  Bu birikim `app/scanner/db_models.py`
   üzerinden veritabanına kalıcı olarak yazılır (`app/scanner/bar_repository.py`),
   bu yüzden bir yeniden başlatma (redeploy, masaüstü EXE'nin kapatılıp
   açılması) sonrasında **sıfırdan başlamaz** — kaldığı yerden devam eder.
@@ -238,8 +251,9 @@ See `.env.example`. Key settings:
 - `DATABASE_URL=sqlite:///./alphascope.db` — no database server required. Point
   this at Postgres in production without any code changes.
 - `PAPER_TRADING_ONLY=true`, `LIVE_TRADING_ENABLED=false` — must stay this way.
-- `GLOBAL_SYMBOLS`, `GLOBAL_POLL_INTERVAL_SECONDS` — see "Global (ABD) ve BIST 30 sekmeleri" above.
-- `BIST_ENABLED`, `BIST_SYMBOLS`, `BIST_POLL_INTERVAL_SECONDS` — see "Global (ABD) ve BIST 30 sekmeleri" above.
+- `GLOBAL_SYMBOLS`, `GLOBAL_POLL_INTERVAL_SECONDS` — see "Global (ABD), BIST 30 ve Kripto sekmeleri" above.
+- `BIST_ENABLED`, `BIST_SYMBOLS`, `BIST_POLL_INTERVAL_SECONDS` — see "Global (ABD), BIST 30 ve Kripto sekmeleri" above.
+- `CRYPTO_ENABLED`, `CRYPTO_SYMBOLS`, `CRYPTO_POLL_INTERVAL_SECONDS` — see "Global (ABD), BIST 30 ve Kripto sekmeleri" above.
 - `NEWS_ENABLED`, `NEWS_POLL_INTERVAL_SECONDS`, `NEWS_MAX_ITEMS_PER_SYMBOL` — see "Haber duyarlılığı" above.
 
 ## Architecture
