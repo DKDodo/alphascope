@@ -1,9 +1,10 @@
 # Packaging AlphaScope as a desktop EXE
 
 `build_exe.bat` uses PyInstaller to bundle `desktop_launcher.py` (which
-starts the API server and opens `http://127.0.0.1:8000/` in your browser)
-into a single `dist\AlphaScope.exe` — no Python installation needed on the
-machine that runs it.
+starts the API server and shows the dashboard in its own native window via
+`pywebview` — no browser tab, no address bar) into a single
+`dist\AlphaScope.exe` — no Python installation needed on the machine that
+runs it.
 
 ## Build it
 

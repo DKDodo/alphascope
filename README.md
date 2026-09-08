@@ -79,8 +79,8 @@ Or just double-click **`run.bat`**, which does all of the above automatically.
 
 Run `build_exe.bat` once (from an activated venv with dependencies installed)
 to produce `dist/AlphaScope.exe` via PyInstaller — a single file that starts
-the server and opens your browser, no Python installation required on the
-target machine. See [PACKAGING.md](PACKAGING.md) for details and how to put
+the server and shows the dashboard in its own native window (no browser tab),
+no Python installation required on the target machine. See [PACKAGING.md](PACKAGING.md) for details and how to put
 a shortcut on the Desktop.
 
 ## Dashboard (Türkçe arayüz)
