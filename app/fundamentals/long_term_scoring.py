@@ -26,18 +26,37 @@ _NEGATIVE_RECOMMENDATIONS = {"sell", "strong_sell", "underperform"}
 
 
 def score_valuation(f: FundamentalSnapshot) -> tuple[int, list[Reason]]:
+    score = 0
+    reasons: list[Reason] = []
+
     pe = f.trailing_pe or f.forward_pe
-    if pe is None:
-        return 0, []
-    if pe <= 0:
-        return 0, [Reason(text="F/K oranı negatif (şirket zarar ediyor)", positive=False)]
-    if pe < 15:
-        return 20, [Reason(text=f"F/K oranı düşük/makul ({pe:.1f}) — ucuz değerleme", positive=True)]
-    if pe < 25:
-        return 12, [Reason(text=f"F/K oranı makul aralıkta ({pe:.1f})", positive=True)]
-    if pe < 40:
-        return 0, []
-    return 0, [Reason(text=f"F/K oranı yüksek ({pe:.1f}) — pahalı değerleme", positive=False)]
+    if pe is not None:
+        if pe <= 0:
+            reasons.append(Reason(text="F/K oranı negatif (şirket zarar ediyor)", positive=False))
+        elif pe < 15:
+            score += 14
+            reasons.append(Reason(text=f"F/K oranı düşük/makul ({pe:.1f}) — ucuz değerleme", positive=True))
+        elif pe < 25:
+            score += 8
+            reasons.append(Reason(text=f"F/K oranı makul aralıkta ({pe:.1f})", positive=True))
+        elif pe >= 40:
+            reasons.append(Reason(text=f"F/K oranı yüksek ({pe:.1f}) — pahalı değerleme", positive=False))
+
+    if f.price_to_book is not None:
+        if f.price_to_book <= 0:
+            pass
+        elif f.price_to_book < 1:
+            score += 6
+            reasons.append(
+                Reason(text=f"F/DD oranı 1'in altında ({f.price_to_book:.2f}) — defter değerinin altında işlem görüyor", positive=True)
+            )
+        elif f.price_to_book < 3:
+            score += 3
+            reasons.append(Reason(text=f"F/DD oranı makul ({f.price_to_book:.2f})", positive=True))
+        elif f.price_to_book > 8:
+            reasons.append(Reason(text=f"F/DD oranı yüksek ({f.price_to_book:.2f}) — defter değerine göre pahalı", positive=False))
+
+    return min(score, MAX_CATEGORY_SCORE), reasons
 
 
 def score_profitability(f: FundamentalSnapshot) -> tuple[int, list[Reason]]:
@@ -45,13 +64,19 @@ def score_profitability(f: FundamentalSnapshot) -> tuple[int, list[Reason]]:
     reasons: list[Reason] = []
     if f.profit_margin_pct is not None:
         if f.profit_margin_pct > 15:
-            score += 10
+            score += 8
             reasons.append(Reason(text=f"Net kâr marjı güçlü (%{f.profit_margin_pct:.1f})", positive=True))
         elif f.profit_margin_pct < 0:
             reasons.append(Reason(text=f"Net kâr marjı negatif (%{f.profit_margin_pct:.1f})", positive=False))
+    if f.ebitda_margin_pct is not None:
+        if f.ebitda_margin_pct > 20:
+            score += 6
+            reasons.append(Reason(text=f"FAVÖK marjı güçlü (%{f.ebitda_margin_pct:.1f})", positive=True))
+        elif f.ebitda_margin_pct < 0:
+            reasons.append(Reason(text=f"FAVÖK marjı negatif (%{f.ebitda_margin_pct:.1f})", positive=False))
     if f.return_on_equity_pct is not None:
         if f.return_on_equity_pct > 15:
-            score += 10
+            score += 6
             reasons.append(Reason(text=f"Özkaynak kârlılığı (ROE) güçlü (%{f.return_on_equity_pct:.1f})", positive=True))
         elif f.return_on_equity_pct < 0:
             reasons.append(Reason(text=f"Özkaynak kârlılığı (ROE) negatif (%{f.return_on_equity_pct:.1f})", positive=False))
@@ -130,7 +155,8 @@ def evaluate_long_term_outlook(
     reasons = [*valuation_reasons, *profitability_reasons, *growth_reasons, *health_reasons, *rec_reasons]
 
     has_any_data = any([
-        fundamentals.trailing_pe, fundamentals.forward_pe, fundamentals.profit_margin_pct,
+        fundamentals.trailing_pe, fundamentals.forward_pe, fundamentals.price_to_book,
+        fundamentals.profit_margin_pct, fundamentals.ebitda_margin_pct,
         fundamentals.revenue_growth_pct, fundamentals.debt_to_equity, fundamentals.analyst_recommendation,
     ])
     label = _classify(total_score) if has_any_data else LongTermOutlookLabel.INSUFFICIENT_DATA

@@ -349,12 +349,34 @@ const OUTLOOK_BADGE_SINIF = {
 const TEMEL_ALAN_ETIKET = {
   trailing_pe: "F/K Oranı (Trailing)",
   forward_pe: "F/K Oranı (Forward)",
+  price_to_book: "F/DD Oranı (Piyasa Değeri/Defter Değeri)",
+  market_cap: "Piyasa Değeri",
+  book_value_per_share: "Defter Değeri (Hisse Başına)",
   profit_margin_pct: "Net Kâr Marjı",
+  ebitda_margin_pct: "FAVÖK Marjı",
+  net_income: "Net Kâr (Yıllık)",
   revenue_growth_pct: "Gelir Büyümesi (Yıllık)",
   return_on_equity_pct: "Özkaynak Kârlılığı (ROE)",
   debt_to_equity: "Borç/Özkaynak Oranı",
   analyst_target_price: "Analist Ortalama Hedef Fiyat",
 };
+// Skorlanan alanlar (F/K, F/DD, kâr marjı, FAVÖK marjı, ROE, borç/özkaynak,
+// büyüme) Uzun Vadeli Görünüm skoruna dahildir. Mutlak/ölçek bağımlı
+// rakamlar (piyasa değeri, defter değeri, net kâr tutarı) şirket büyüklüğüne
+// göre doğal olarak değiştiği için kasıtlı olarak SADECE bilgi amaçlı
+// gösterilir, current_price/analyst_target_price ile aynı mantık.
+const BUYUK_RAKAM_ALANLARI = new Set(["market_cap", "net_income"]);
+
+function buyukSayiFormat(deger) {
+  if (deger === null || deger === undefined || Number.isNaN(deger)) return "-";
+  const birim = aktifPazarBilgi().currency_symbol;
+  const isaret = deger < 0 ? "-" : "";
+  const abs = Math.abs(deger);
+  if (abs >= 1e12) return `${isaret}${(abs / 1e12).toFixed(2)} Trilyon ${birim}`;
+  if (abs >= 1e9) return `${isaret}${(abs / 1e9).toFixed(2)} Milyar ${birim}`;
+  if (abs >= 1e6) return `${isaret}${(abs / 1e6).toFixed(2)} Milyon ${birim}`;
+  return paraBirimli(deger);
+}
 
 async function uzunVadeYukle(sembol) {
   const kutu = document.getElementById("uzun-vade-icerik");
@@ -392,12 +414,19 @@ function renderUzunVade(outlook) {
         .join("")}</ul>`
     : '<p class="detail-empty">Belirgin bir gerekçe bulunamadı.</p>';
 
-  const veriAlanlari = ["trailing_pe", "forward_pe", "profit_margin_pct", "revenue_growth_pct", "return_on_equity_pct", "debt_to_equity", "analyst_target_price"]
-    .filter((alan) => f[alan] !== null && f[alan] !== undefined);
+  const veriAlanlari = [
+    "trailing_pe", "forward_pe", "price_to_book", "market_cap", "book_value_per_share",
+    "profit_margin_pct", "ebitda_margin_pct", "net_income", "revenue_growth_pct",
+    "return_on_equity_pct", "debt_to_equity", "analyst_target_price",
+  ].filter((alan) => f[alan] !== null && f[alan] !== undefined);
 
   const veriGridHtml = veriAlanlari.length
     ? `<div class="risk-grid">${veriAlanlari.map((alan) => {
-        const deger = alan.endsWith("_pct") ? `%${paraFormat(f[alan])}` : (alan === "analyst_target_price" ? paraBirimli(f[alan]) : paraFormat(f[alan]));
+        let deger;
+        if (BUYUK_RAKAM_ALANLARI.has(alan)) deger = buyukSayiFormat(f[alan]);
+        else if (alan.endsWith("_pct")) deger = `%${paraFormat(f[alan])}`;
+        else if (alan === "analyst_target_price" || alan === "book_value_per_share") deger = paraBirimli(f[alan]);
+        else deger = paraFormat(f[alan]);
         return `<div class="cell"><span class="label">${TEMEL_ALAN_ETIKET[alan]}</span><span class="value">${deger}</span></div>`;
       }).join("")}</div>`
     : "";

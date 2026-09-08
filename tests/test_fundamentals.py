@@ -7,9 +7,11 @@ from app.fundamentals.models import FundamentalSnapshot, LongTermOutlookLabel
 def _snapshot(**overrides) -> FundamentalSnapshot:
     defaults = dict(
         symbol="TEST", long_name="Test Inc.", sector="Technology",
-        trailing_pe=None, forward_pe=None, profit_margin_pct=None, revenue_growth_pct=None,
+        trailing_pe=None, forward_pe=None, price_to_book=None,
+        profit_margin_pct=None, ebitda_margin_pct=None, revenue_growth_pct=None,
         return_on_equity_pct=None, debt_to_equity=None, analyst_recommendation=None,
         analyst_target_price=None, current_price=100.0,
+        market_cap=None, book_value_per_share=None, net_income=None,
     )
     defaults.update(overrides)
     return FundamentalSnapshot(**defaults)
@@ -17,7 +19,7 @@ def _snapshot(**overrides) -> FundamentalSnapshot:
 
 def test_valuation_scores_low_pe_favorably():
     score, reasons = long_term_scoring.score_valuation(_snapshot(trailing_pe=10.0))
-    assert score == 20
+    assert score == 14
     assert reasons[0].positive is True
 
 
@@ -39,12 +41,43 @@ def test_valuation_no_data_returns_no_reasons():
     assert reasons == []
 
 
+def test_valuation_rewards_low_price_to_book():
+    score, reasons = long_term_scoring.score_valuation(_snapshot(price_to_book=0.8))
+    assert score == 6
+    assert reasons[0].positive is True
+
+
+def test_valuation_flags_high_price_to_book():
+    score, reasons = long_term_scoring.score_valuation(_snapshot(price_to_book=10.0))
+    assert score == 0
+    assert reasons[0].positive is False
+
+
+def test_valuation_combines_pe_and_price_to_book():
+    score, _ = long_term_scoring.score_valuation(_snapshot(trailing_pe=10.0, price_to_book=0.8))
+    assert score == 20
+
+
 def test_profitability_combines_margin_and_roe():
     score, reasons = long_term_scoring.score_profitability(
         _snapshot(profit_margin_pct=20.0, return_on_equity_pct=25.0)
     )
-    assert score == 20
+    assert score == 14
     assert len(reasons) == 2
+
+
+def test_profitability_combines_all_three_metrics():
+    score, reasons = long_term_scoring.score_profitability(
+        _snapshot(profit_margin_pct=20.0, ebitda_margin_pct=30.0, return_on_equity_pct=25.0)
+    )
+    assert score == 20
+    assert len(reasons) == 3
+
+
+def test_profitability_flags_negative_ebitda_margin():
+    score, reasons = long_term_scoring.score_profitability(_snapshot(ebitda_margin_pct=-5.0))
+    assert score == 0
+    assert reasons[0].positive is False
 
 
 def test_growth_flags_contraction():

@@ -52,13 +52,18 @@ def _fetch_snapshot_sync(symbol: str, ticker_symbol: str) -> FundamentalSnapshot
         sector=info.get("sector"),
         trailing_pe=_num(info.get("trailingPE")),
         forward_pe=_num(info.get("forwardPE")),
+        price_to_book=_num(info.get("priceToBook")),
         profit_margin_pct=_pct(info.get("profitMargins")),
+        ebitda_margin_pct=_pct(info.get("ebitdaMargins")),
         revenue_growth_pct=_pct(info.get("revenueGrowth")),
         return_on_equity_pct=_pct(info.get("returnOnEquity")),
         debt_to_equity=_num(info.get("debtToEquity")),
         analyst_recommendation=recommendation,
         analyst_target_price=_num(info.get("targetMeanPrice")),
         current_price=_num(info.get("currentPrice") or info.get("regularMarketPrice")),
+        market_cap=_num(info.get("marketCap")),
+        book_value_per_share=_num(info.get("bookValue")),
+        net_income=_num(info.get("netIncomeToCommon")),
     )
 
 

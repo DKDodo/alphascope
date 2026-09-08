@@ -24,13 +24,22 @@ class FundamentalSnapshot(BaseModel):
     sector: str | None = None
     trailing_pe: float | None = None
     forward_pe: float | None = None
+    price_to_book: float | None = None  # scored alongside P/E — see score_valuation
     profit_margin_pct: float | None = None
+    ebitda_margin_pct: float | None = None  # scored alongside profit margin — see score_profitability
     revenue_growth_pct: float | None = None
     return_on_equity_pct: float | None = None
     debt_to_equity: float | None = None
     analyst_recommendation: str | None = None  # Yahoo's own consensus label, verbatim
     analyst_target_price: float | None = None
     current_price: float | None = None
+    # Scale-dependent absolute figures — deliberately NOT scored (a bigger
+    # company has a naturally bigger market cap/net income than a smaller
+    # one; that says nothing about which is the better investment). Shown
+    # as reference data only, same as current_price/analyst_target_price.
+    market_cap: float | None = None
+    book_value_per_share: float | None = None
+    net_income: float | None = None
 
 
 class LongTermOutlook(BaseModel):

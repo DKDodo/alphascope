@@ -163,11 +163,17 @@ olumlu/olumsuz/nötr olarak sınıflandırılır.
 
 Her sembol detayında, kısa vadeli teknik sinyalden tamamen ayrı olarak:
 
-- **Uzun Vadeli Görünüm**: F/K oranı, kâr marjı, gelir büyümesi, ROE,
-  borç/özkaynak oranı, analist konsensüsü ve uzun vadeli trend (EMA50 vs
-  EMA200) — `app/fundamentals/`. Kısa vadeli Fırsat Skoru ile **kasıtlı
-  olarak birleştirilmez**: bir hisse kısa vadede iyi bir teknik kurulum,
-  uzun vadede zayıf bir temel hikâye olabilir (ya da tam tersi).
+- **Uzun Vadeli Görünüm**: F/K oranı, F/DD (Piyasa Değeri/Defter Değeri)
+  oranı, net kâr marjı, FAVÖK marjı, gelir büyümesi, ROE, borç/özkaynak
+  oranı, analist konsensüsü ve uzun vadeli trend (EMA50 vs EMA200) —
+  `app/fundamentals/`, skora dahil edilir (0-100). Ayrıca piyasa değeri,
+  defter değeri (hisse başına) ve net kâr tutarı bilgi amaçlı gösterilir
+  ama **kasıtlı olarak skorlanmaz** — bunlar şirket büyüklüğüne göre doğal
+  olarak değiştiği için "yüksek/düşük = iyi/kötü" diye bir kural yok (aynı
+  mantık `current_price`/`analyst_target_price` için de geçerli). Uzun
+  Vadeli Görünüm, kısa vadeli Fırsat Skoru ile de **kasıtlı olarak
+  birleştirilmez**: bir hisse kısa vadede iyi bir teknik kurulum, uzun
+  vadede zayıf bir temel hikâye olabilir (ya da tam tersi).
 - **Makro şerit** (sekmelerin altında): BIST'te USD/TRY ve BIST 100, Global'de
   S&P 500 ve VIX — `app/macro/`. Sadece bilgi amaçlı, hiçbir skora karışmaz.
 
