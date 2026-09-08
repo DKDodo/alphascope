@@ -251,6 +251,15 @@ async def lifespan(app: FastAPI):
 
     db = Database(settings.database_url)
     db.create_all()
+    # create_all() only creates brand-new tables -- these backfill columns
+    # added after simulation_runs/simulation_positions already had rows in
+    # production, so an existing running simulation survives the upgrade
+    # (see Database.ensure_columns()).
+    db.ensure_columns("simulation_runs", {"peak_equity": "FLOAT DEFAULT 0.0"})
+    db.ensure_columns("simulation_positions", {
+        "take_profit_2": "FLOAT",
+        "partial_exit_done": "INTEGER DEFAULT 0",
+    })
     app.state.db = db
 
     contexts: dict[str, MarketContext] = {}

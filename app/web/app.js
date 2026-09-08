@@ -708,6 +708,11 @@ function renderSimulasyon(sim) {
     ${sim.status === "RUNNING" ? `
       <div class="sim-progress"><div class="sim-progress-track"><div class="sim-progress-fill" style="width:${ilerlemeYuzde}%"></div></div></div>
       <button id="sim-durdur-btn" class="sim-stop-btn">Simülasyonu Durdur</button>` : ""}
+    ${sim.peak_equity !== null && sim.peak_equity !== undefined ? `
+      <p class="hint" style="margin:6px 0 10px;">
+        📉 Zirve Özkaynak: ${birim} ${paraFormat(sim.peak_equity)} — Şu anki düşüş: %${paraFormat(sim.drawdown_pct)}
+        ${sim.trading_paused ? ` — <strong style="color:var(--red);">⏸️ Yeni pozisyon açma geçici durduruldu (zarar tavanı aşıldı)</strong>` : ""}
+      </p>` : ""}
     <div class="portfolio-summary">
       <div class="stat"><span class="stat-label">Başlangıç</span><span class="stat-value">${birim} ${paraFormat(sim.initial_cash)}</span></div>
       <div class="stat"><span class="stat-label">Güncel Toplam Değer</span><span class="stat-value">${birim} ${paraFormat(sim.equity)}</span></div>

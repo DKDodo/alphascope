@@ -325,7 +325,20 @@ See `.env.example`. Key settings:
   the daily-bar trend (`app/daily_trend/`, EMA50 vs EMA200) not to be
   confirmed down, and new-position risk is derated when VIX is elevated —
   none of this touches the Opportunity Score itself, only which symbols the
-  simulation actually buys and how large those positions are.
+  simulation actually buys and how large those positions are. Both entry
+  paths also skip a symbol whose long-term fundamentals outlook (see
+  "Uzun vadeli görünüm" below) is confirmed UNFAVORABLE. A portfolio-level
+  circuit breaker pauses new entries (existing positions keep exiting
+  normally) once a run's equity has drawn down `MAX_DRAWDOWN_FRACTION`
+  from its peak — visible in the simulation panel as "Zirve Özkaynak".
+  Take-profit fires in two steps: half the position closes at TP1, the
+  remainder's target is promoted to TP2 with its stop still trailing
+  ("Kısmi Kâr Alım" in the trade log). A flat `TRANSACTION_COST_RATE` is
+  charged on both legs of every trade so reported returns aren't an
+  unrealistic zero-friction number. `app/storage/database.py`'s
+  `ensure_columns()` is what lets these new SQLite columns land on a
+  simulation that was already running before the upgrade, without losing
+  its history — `create_all()` alone only creates brand-new tables.
 - `app/portfolio/` — virtual paper trading only.
 - `app/services/` — background tasks wiring the provider stream into the scanner,
   with reconnect/backoff so a provider outage never crashes the app.

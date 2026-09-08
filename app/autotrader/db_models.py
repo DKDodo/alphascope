@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import DateTime, Float, ForeignKey, Integer, String
+from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, String
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.storage.database import Base
@@ -27,6 +27,11 @@ class SimulationRun(Base):
     initial_cash: Mapped[float] = mapped_column(Float)
     cash: Mapped[float] = mapped_column(Float)
     realized_pnl: Mapped[float] = mapped_column(Float, default=0.0)
+    # Highest equity (cash + open positions' market value) seen so far this
+    # run -- lets AutoTraderService pause new entries after a drawdown from
+    # that peak (see MAX_DRAWDOWN_FRACTION). Added after this table already
+    # existed in production; see Database.ensure_columns().
+    peak_equity: Mapped[float] = mapped_column(Float, default=0.0)
     currency_symbol: Mapped[str] = mapped_column(String(5), default="")
 
     positions: Mapped[list["SimulationPosition"]] = relationship(
@@ -46,7 +51,16 @@ class SimulationPosition(Base):
     quantity: Mapped[float] = mapped_column(Float)
     average_price: Mapped[float] = mapped_column(Float)
     stop_loss: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # "Current active target" -- starts as TP1; once the partial exit fires
+    # it's overwritten with take_profit_2's value for the remaining half
+    # (see AutoTraderService._partial_sell), so exit-checking code only
+    # ever needs to compare price against this one field.
     take_profit: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # The second-tier target, staged at entry -- NULL for positions opened
+    # before this feature shipped, which correctly skips partial-exit
+    # handling for them (see Database.ensure_columns()).
+    take_profit_2: Mapped[float | None] = mapped_column(Float, nullable=True)
+    partial_exit_done: Mapped[bool] = mapped_column(Boolean, default=False)
     opened_at: Mapped[datetime] = mapped_column(DateTime)
 
     run: Mapped[SimulationRun] = relationship(back_populates="positions")

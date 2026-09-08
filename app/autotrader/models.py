@@ -49,6 +49,9 @@ class SimulationStatusOut(BaseModel):
     realized_pnl: float | None = None
     unrealized_pnl: float | None = None
     total_return_pct: float | None = None
+    peak_equity: float | None = None
+    drawdown_pct: float | None = None  # % below peak_equity right now
+    trading_paused: bool = False  # true once drawdown_pct >= the circuit breaker threshold
     trade_count: int = 0
     positions: list[SimulationPositionOut] = []
     recent_trades: list[SimulationTradeOut] = []

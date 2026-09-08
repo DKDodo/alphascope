@@ -5,9 +5,15 @@ from datetime import datetime, timedelta, timezone
 import pytest
 from sqlalchemy.orm import sessionmaker
 
-from app.autotrader.autotrader_service import AutoTraderService, MAX_CONCURRENT_POSITIONS
+from app.autotrader.autotrader_service import (
+    AutoTraderService,
+    MAX_CONCURRENT_POSITIONS,
+    MAX_DRAWDOWN_FRACTION,
+    TRANSACTION_COST_RATE,
+)
 from app.autotrader.db_models import SimulationPosition, SimulationRun
 from app.core.exceptions import RiskCalculationError
+from app.fundamentals.models import LongTermOutlook, LongTermOutlookLabel
 from app.macro.models import MacroIndicator
 from app.risk.risk_engine import RiskAnalysis, RiskLevel
 from app.signals.models import CategoryScores, DipConfidence, DipOpportunity, SignalResult, SignalType
@@ -24,14 +30,16 @@ class _FakeScannerService:
     def set_signal(
         self, symbol: str, signal: SignalType, price: float, score: int = 80,
         stop_loss: float | None = None, take_profit_1: float | None = None,
+        take_profit_2: float | None = None,
         daily_trend_up: bool | None = None, dip_confidence: DipConfidence | None = None,
     ) -> None:
         risk = None
         if stop_loss is not None:
+            resolved_tp1 = take_profit_1 or price * 1.1
             risk = RiskAnalysis(
-                entry_price=price, stop_loss=stop_loss, take_profit_1=take_profit_1 or price * 1.1,
-                take_profit_2=take_profit_1 or price * 1.2, atr=1.0, risk_per_share=price - stop_loss,
-                reward_per_share_tp1=(take_profit_1 or price * 1.1) - price, risk_reward_ratio=2.0,
+                entry_price=price, stop_loss=stop_loss, take_profit_1=resolved_tp1,
+                take_profit_2=take_profit_2 or resolved_tp1 * 1.1, atr=1.0, risk_per_share=price - stop_loss,
+                reward_per_share_tp1=resolved_tp1 - price, risk_reward_ratio=2.0,
                 risk_level=RiskLevel.MEDIUM,
             )
         dip_opportunity = None
@@ -56,16 +64,24 @@ class _FakeScannerService:
 
 class _FakeFundamentalsService:
     """Minimal stand-in for FundamentalsService: AutoTraderService only
-    calls get_sector()."""
+    calls get_sector() and get_long_term_outlook()."""
 
     def __init__(self) -> None:
         self._sectors: dict[str, str] = {}
+        self._outlooks: dict[str, LongTermOutlookLabel] = {}
 
     def set_sector(self, symbol: str, sector: str) -> None:
         self._sectors[symbol.upper()] = sector
 
     def get_sector(self, symbol: str) -> str | None:
         return self._sectors.get(symbol.upper())
+
+    def set_outlook_label(self, symbol: str, label: LongTermOutlookLabel) -> None:
+        self._outlooks[symbol.upper()] = label
+
+    def get_long_term_outlook(self, symbol: str) -> LongTermOutlook:
+        label = self._outlooks.get(symbol.upper(), LongTermOutlookLabel.NEUTRAL)
+        return LongTermOutlook(symbol=symbol.upper(), label=label, score=50, reasons=[])
 
 
 class _FakeMacroService:
@@ -131,7 +147,8 @@ def test_tick_buys_on_strong_signal(session_factory, scanner):
     assert status.positions[0].symbol == "AAPL"
     # risk-based sizing wants (cash*2%)/risk_per_share*price = 4000 here,
     # which exceeds the flat 20% cap (2000) -- so it hits the cap instead.
-    assert status.cash == pytest.approx(10_000.0 * 0.8)
+    # Cash paid out also includes the buy-side transaction cost.
+    assert status.cash == pytest.approx(10_000.0 - 2000.0 * (1 + TRANSACTION_COST_RATE))
 
 
 def test_tick_sells_on_stop_loss_hit(session_factory, scanner):
@@ -255,11 +272,15 @@ def test_position_sizing_scales_inversely_with_stop_distance(session_factory, sc
     status = svc.get_status()
     positions = {p.symbol: p for p in status.positions}
     # TIGHT is processed first (higher score), sized against the full 10,000.
+    # (quantity is sized off the raw allocation/price -- the transaction
+    # cost only changes how much cash is actually paid out, not this.)
     assert positions["TIGHT"].quantity * 100.0 == pytest.approx(2000.0)
-    # WIDE is processed second, against the remaining 8,000 cash: risk_budget
-    # = 8000*2% = 160, quantity = 160/20 = 8, value = 800 -- a much smaller
-    # position than TIGHT's, because it's more volatile (wider stop).
-    assert positions["WIDE"].quantity * 100.0 == pytest.approx(800.0)
+    # WIDE is processed second, against whatever cash TIGHT's purchase left
+    # behind -- which is slightly less than a naive 8,000 because TIGHT's
+    # cash outlay included its own transaction cost.
+    remaining_cash = 10_000.0 - 2000.0 * (1 + TRANSACTION_COST_RATE)
+    expected_wide_value = (remaining_cash * 0.02 / 20.0) * 100.0
+    assert positions["WIDE"].quantity * 100.0 == pytest.approx(expected_wide_value)
 
 
 def test_position_sizing_falls_back_to_flat_cap_without_a_stop(session_factory, scanner):
@@ -449,6 +470,195 @@ def test_dip_entry_skipped_when_daily_trend_is_confirmed_down(session_factory, s
     svc._tick_sync()
 
     assert len(svc.get_status().positions) == 0
+
+
+def test_long_term_outlook_unfavorable_blocks_entry(session_factory, scanner):
+    fundamentals = _FakeFundamentalsService()
+    fundamentals.set_outlook_label("AAPL", LongTermOutlookLabel.UNFAVORABLE)
+    svc = _service(session_factory, scanner, fundamentals=fundamentals)
+    svc.start_run(initial_cash=10_000.0, duration_days=7.0)
+    scanner.set_signal("AAPL", SignalType.STRONG_BUY_SETUP, price=100.0, stop_loss=95.0, score=90)
+
+    svc._tick_sync()
+
+    assert len(svc.get_status().positions) == 0
+
+
+def test_long_term_outlook_neutral_or_unset_allows_entry(session_factory, scanner):
+    fundamentals = _FakeFundamentalsService()
+    fundamentals.set_outlook_label("AAPL", LongTermOutlookLabel.NEUTRAL)
+    svc = _service(session_factory, scanner, fundamentals=fundamentals)
+    svc.start_run(initial_cash=10_000.0, duration_days=7.0)
+    scanner.set_signal("AAPL", SignalType.STRONG_BUY_SETUP, price=100.0, stop_loss=95.0, score=90)
+
+    svc._tick_sync()
+
+    assert len(svc.get_status().positions) == 1
+
+
+def test_long_term_outlook_favorable_allows_entry_and_unfavorable_still_blocks(session_factory, scanner):
+    fundamentals = _FakeFundamentalsService()
+    fundamentals.set_outlook_label("GOOD", LongTermOutlookLabel.FAVORABLE)
+    fundamentals.set_outlook_label("BAD", LongTermOutlookLabel.UNFAVORABLE)
+    svc = _service(session_factory, scanner, fundamentals=fundamentals)
+    svc.start_run(initial_cash=100_000.0, duration_days=7.0)
+    scanner.set_signal("GOOD", SignalType.STRONG_BUY_SETUP, price=100.0, stop_loss=95.0, score=90)
+    scanner.set_signal("BAD", SignalType.STRONG_BUY_SETUP, price=100.0, stop_loss=95.0, score=90)
+
+    svc._tick_sync()
+
+    bought = {p.symbol for p in svc.get_status().positions}
+    assert bought == {"GOOD"}
+
+
+def test_drawdown_circuit_breaker_blocks_new_entries(session_factory, scanner):
+    svc = _service(session_factory, scanner)
+    svc.start_run(initial_cash=10_000.0, duration_days=7.0)
+    # Simulate a run that has already drawn down past the breaker threshold.
+    with session_factory() as db:
+        run = db.query(SimulationRun).filter(SimulationRun.market == "test").one()
+        run.peak_equity = 10_000.0
+        run.cash = 10_000.0 * (1 - MAX_DRAWDOWN_FRACTION - 0.01)
+        db.commit()
+    scanner.set_signal("AAPL", SignalType.STRONG_BUY_SETUP, price=100.0, stop_loss=95.0, score=90)
+
+    svc._tick_sync()
+
+    assert len(svc.get_status().positions) == 0
+
+
+def test_drawdown_circuit_breaker_does_not_block_existing_exits(session_factory, scanner):
+    svc = _service(session_factory, scanner)
+    svc.start_run(initial_cash=10_000.0, duration_days=7.0)
+    scanner.set_signal("AAPL", SignalType.STRONG_BUY_SETUP, price=100.0, stop_loss=95.0, take_profit_1=200.0)
+    svc._tick_sync()  # buys AAPL while the breaker is inactive
+
+    # Now force the breaker active AND hit AAPL's stop-loss in the same tick.
+    with session_factory() as db:
+        run = db.query(SimulationRun).filter(SimulationRun.market == "test").one()
+        run.peak_equity = 50_000.0  # far above current equity -> breaker active
+        db.commit()
+    scanner.set_signal("AAPL", SignalType.NEUTRAL, price=94.0, stop_loss=95.0, take_profit_1=200.0)
+
+    svc._tick_sync()
+
+    status = svc.get_status()
+    assert len(status.positions) == 0  # stop-loss exit still happened despite the breaker
+    assert status.recent_trades[0].action == "SELL"
+
+
+def test_status_reports_peak_equity_and_drawdown(session_factory, scanner):
+    svc = _service(session_factory, scanner)
+    status = svc.start_run(initial_cash=10_000.0, duration_days=7.0)
+    assert status.peak_equity == pytest.approx(10_000.0)
+    assert status.drawdown_pct == pytest.approx(0.0)
+    assert status.trading_paused is False
+
+    with session_factory() as db:
+        run = db.query(SimulationRun).filter(SimulationRun.market == "test").one()
+        run.peak_equity = 10_000.0
+        run.cash = 8_000.0  # 20% drawdown, well past the 10% breaker
+        db.commit()
+
+    status = svc.get_status()
+    assert status.drawdown_pct == pytest.approx(20.0)
+    assert status.trading_paused is True
+
+
+def test_partial_profit_taking_sells_half_at_tp1_and_promotes_target_to_tp2(session_factory, scanner):
+    svc = _service(session_factory, scanner)
+    svc.start_run(initial_cash=10_000.0, duration_days=7.0)
+    scanner.set_signal(
+        "AAPL", SignalType.STRONG_BUY_SETUP, price=100.0, stop_loss=95.0,
+        take_profit_1=110.0, take_profit_2=120.0,
+    )
+    svc._tick_sync()  # buys AAPL
+    original_quantity = svc.get_status().positions[0].quantity
+
+    scanner.set_signal(
+        "AAPL", SignalType.BUY_SETUP, price=111.0, stop_loss=95.0,
+        take_profit_1=110.0, take_profit_2=120.0,
+    )
+    svc._tick_sync()  # price >= TP1 -> partial exit
+
+    status = svc.get_status()
+    assert len(status.positions) == 1  # still open -- only half closed
+    assert status.positions[0].quantity == pytest.approx(original_quantity / 2)
+    assert status.positions[0].take_profit == pytest.approx(120.0)  # promoted to TP2
+    assert status.recent_trades[0].action == "SELL"
+    assert "Kısmi" in status.recent_trades[0].reason
+
+    # A second tick at the same price must not partially exit again.
+    svc._tick_sync()
+    assert svc.get_status().positions[0].quantity == pytest.approx(original_quantity / 2)
+
+
+def test_partial_profit_taking_remainder_closes_fully_at_promoted_target(session_factory, scanner):
+    svc = _service(session_factory, scanner)
+    svc.start_run(initial_cash=10_000.0, duration_days=7.0)
+    scanner.set_signal(
+        "AAPL", SignalType.STRONG_BUY_SETUP, price=100.0, stop_loss=95.0,
+        take_profit_1=110.0, take_profit_2=120.0,
+    )
+    svc._tick_sync()  # buys AAPL
+
+    scanner.set_signal(
+        "AAPL", SignalType.BUY_SETUP, price=111.0, stop_loss=95.0,
+        take_profit_1=110.0, take_profit_2=120.0,
+    )
+    svc._tick_sync()  # partial exit at TP1, remainder's target -> 120.0
+
+    scanner.set_signal(
+        "AAPL", SignalType.BUY_SETUP, price=121.0, stop_loss=95.0,
+        take_profit_1=110.0, take_profit_2=120.0,
+    )
+    svc._tick_sync()  # price >= promoted target -> remainder fully closes
+
+    status = svc.get_status()
+    assert len(status.positions) == 0
+    assert status.recent_trades[0].action == "SELL"
+    assert "Kâr-al" in status.recent_trades[0].reason  # the normal full-exit path, not another partial
+
+
+def test_no_partial_exit_for_a_position_without_take_profit_2(session_factory, scanner):
+    """A position that predates this feature -- persisted with
+    take_profit_2 = NULL, exactly what Database.ensure_columns() backfills
+    for an already-running position -- must fall back to the old
+    all-or-nothing exit at TP1 rather than erroring or getting stuck."""
+    svc = _service(session_factory, scanner)
+    svc.start_run(initial_cash=10_000.0, duration_days=7.0)
+    with session_factory() as db:
+        run = db.query(SimulationRun).filter(SimulationRun.market == "test").one()
+        db.add(SimulationPosition(
+            run_id=run.id, symbol="AAPL", quantity=10.0, average_price=100.0,
+            stop_loss=95.0, take_profit=110.0, take_profit_2=None,
+            opened_at=datetime.now(timezone.utc),
+        ))
+        db.commit()
+
+    scanner.set_signal("AAPL", SignalType.BUY_SETUP, price=111.0, stop_loss=95.0, take_profit_1=110.0)
+    svc._tick_sync()
+
+    status = svc.get_status()
+    assert len(status.positions) == 0
+    assert "Kâr-al" in status.recent_trades[0].reason
+
+
+def test_transaction_cost_reduces_round_trip_realized_pnl(session_factory, scanner):
+    svc = _service(session_factory, scanner)
+    svc.start_run(initial_cash=10_000.0, duration_days=7.0)
+    scanner.set_signal("AAPL", SignalType.STRONG_BUY_SETUP, price=100.0, stop_loss=95.0, take_profit_1=200.0)
+    svc._tick_sync()  # buys at 100 -- cost basis becomes 100*(1+cost)
+    quantity = svc.get_status().positions[0].quantity
+
+    scanner.set_signal("AAPL", SignalType.STRONG_BUY_SETUP, price=100.0, stop_loss=95.0, take_profit_1=200.0)
+    status = svc.stop_run()  # sells at the same price with no price movement at all
+
+    # With zero price movement, a frictionless round trip would net exactly
+    # 0 pnl -- the cost model must make this trade a small net loss instead.
+    expected_pnl = (100.0 * (1 - TRANSACTION_COST_RATE) - 100.0 * (1 + TRANSACTION_COST_RATE)) * quantity
+    assert status.realized_pnl == pytest.approx(expected_pnl, abs=0.01)
+    assert status.realized_pnl < 0
 
 
 def test_trailing_stop_never_moves_down(session_factory, scanner):

@@ -29,6 +29,20 @@ Design choices, made explicit because they directly shape the results:
   sizing is derated when VIX is elevated (see MacroService) -- the
   Opportunity Score itself never uses either signal, only this trading
   decision does.
+- Both entry paths also skip a symbol whose long-term fundamentals outlook
+  (see app/fundamentals/long_term_scoring.py) is confirmed UNFAVORABLE --
+  a strong short-term setup on a fundamentally deteriorating company is
+  exactly the kind of divergence worth being cautious about.
+- Portfolio-level circuit breaker: once a run's equity has drawn down
+  MAX_DRAWDOWN_FRACTION from its peak, new entries pause (existing
+  positions keep exiting normally) until it recovers.
+- Take-profit is taken in two steps: PARTIAL_EXIT_FRACTION of the position
+  closes at TP1, the remainder's target is promoted to TP2 and its stop
+  keeps trailing -- locks in some gain early without fully exiting a move
+  that keeps running.
+- A flat TRANSACTION_COST_RATE is charged on both legs of every trade
+  (baked into the cost basis on entry, netted out of proceeds on exit) so
+  reported returns aren't an unrealistic zero-friction fantasy.
 """
 from __future__ import annotations
 
@@ -48,6 +62,7 @@ from app.autotrader.models import (
 from app.core.exceptions import RiskCalculationError
 from app.core.logging import get_logger
 from app.fundamentals.fundamentals_service import FundamentalsService
+from app.fundamentals.models import LongTermOutlookLabel
 from app.macro.macro_service import MacroService
 from app.risk.risk_engine import DEFAULT_STOP_ATR_MULTIPLIER
 from app.services.scanner_service import ScannerService
@@ -64,6 +79,12 @@ MAX_POSITIONS_PER_SECTOR = 2  # forces diversification even within the concurren
 DIP_ENTRY_MIN_CONFIDENCE = DipConfidence.STRONG  # only the highest-confidence dips get a secondary entry
 _VIX_ELEVATED_THRESHOLD = 20.0  # -> halve new-position risk
 _VIX_HIGH_THRESHOLD = 30.0  # -> quarter new-position risk
+# RISK_PER_TRADE_FRACTION * MAX_CONCURRENT_POSITIONS puts a ~10% theoretical
+# ceiling on simultaneous stop-outs -- this catches a genuinely bad streak
+# without tripping on ordinary day-to-day volatility.
+MAX_DRAWDOWN_FRACTION = 0.10
+PARTIAL_EXIT_FRACTION = 0.5  # fraction of the position closed at TP1
+TRANSACTION_COST_RATE = 0.001  # 0.1% per leg (~0.2% round trip) -- one flat, simple assumption across all 3 markets
 
 
 def _as_utc(dt: datetime) -> datetime:
@@ -134,6 +155,7 @@ class AutoTraderService:
                 initial_cash=initial_cash,
                 cash=initial_cash,
                 realized_pnl=0.0,
+                peak_equity=initial_cash,
                 currency_symbol=self._currency_symbol,
             )
             db.add(run)
@@ -195,6 +217,11 @@ class AutoTraderService:
             if signal is None:
                 continue
             self._update_trailing_stop(position, signal)
+
+            if self._should_take_partial_profit(position, signal.price):
+                self._partial_sell(db, run, position, signal.price)
+                continue  # remaining half re-evaluated against the promoted TP2 next tick
+
             reason = self._exit_reason(position, signal.price, signal.signal)
             if reason is not None:
                 self._sell(db, run, position, signal.price, reason)
@@ -221,11 +248,59 @@ class AutoTraderService:
             return "Sinyal KAÇININ'a döndü"
         return None
 
+    def _should_take_partial_profit(self, position: SimulationPosition, price: float) -> bool:
+        return (
+            not position.partial_exit_done
+            and position.take_profit_2 is not None
+            and position.take_profit is not None
+            and price >= position.take_profit
+        )
+
+    def _partial_sell(self, db: Session, run: SimulationRun, position: SimulationPosition, price: float) -> None:
+        """Closes PARTIAL_EXIT_FRACTION of the position at TP1 and promotes
+        the remainder's target to TP2 -- locks in some of the gain while
+        staying in for a bigger move, instead of the all-or-nothing exit
+        _sell() does. The remaining half keeps its trailing stop untouched."""
+        sold_quantity = position.quantity * PARTIAL_EXIT_FRACTION
+        net_price = price * (1 - TRANSACTION_COST_RATE)
+        proceeds = sold_quantity * net_price
+        pnl = (net_price - position.average_price) * sold_quantity
+        run.cash += proceeds
+        run.realized_pnl += pnl
+        db.add(SimulationTradeLog(
+            run_id=run.id,
+            symbol=position.symbol,
+            action="SELL",
+            price=price,
+            quantity=sold_quantity,
+            reason=f"Kısmi Kâr Alım (TP1) — kalan %{round((1 - PARTIAL_EXIT_FRACTION) * 100)} TP2'ye taşındı",
+            realized_pnl=pnl,
+            timestamp=datetime.now(timezone.utc),
+        ))
+        position.quantity -= sold_quantity
+        position.partial_exit_done = True
+        position.take_profit = position.take_profit_2
+        logger.info(
+            "[%s] simulation PARTIAL SELL %s x%.4f @ %.4f (pnl=%.2f, remainder target -> %.4f)",
+            self._market, position.symbol, sold_quantity, price, pnl, position.take_profit,
+        )
+
     def _process_entries(self, db: Session, run: SimulationRun) -> None:
         open_positions = db.execute(
             select(SimulationPosition).where(SimulationPosition.run_id == run.id)
         ).scalars().all()
         open_symbols = {p.symbol for p in open_positions}
+
+        equity = self._compute_equity(run, open_positions)
+        run.peak_equity = max(run.peak_equity or 0.0, equity)
+        drawdown = (run.peak_equity - equity) / run.peak_equity if run.peak_equity > 0 else 0.0
+        if drawdown >= MAX_DRAWDOWN_FRACTION:
+            logger.info(
+                "[%s] autotrader paused: drawdown %.1f%% >= %.1f%% circuit breaker (equity=%.2f, peak=%.2f)",
+                self._market, drawdown * 100, MAX_DRAWDOWN_FRACTION * 100, equity, run.peak_equity,
+            )
+            return  # existing positions still exit normally via _process_exits(); only new entries pause
+
         if len(open_symbols) >= MAX_CONCURRENT_POSITIONS:
             return
 
@@ -248,6 +323,7 @@ class AutoTraderService:
             if r.signal in (SignalType.STRONG_BUY_SETUP, SignalType.BUY_SETUP)
             and r.symbol not in open_symbols
             and r.daily_trend_up is not False
+            and self._passes_long_term_outlook(r.symbol)
         ]
         trend_candidates.sort(key=lambda r: r.score, reverse=True)
         trend_symbols = {r.symbol for r in trend_candidates}
@@ -265,6 +341,7 @@ class AutoTraderService:
             and r.symbol not in open_symbols
             and r.symbol not in trend_symbols
             and r.daily_trend_up is not False
+            and self._passes_long_term_outlook(r.symbol)
         ]
 
         # Trend-based candidates get first claim on the limited slots; dip
@@ -282,9 +359,11 @@ class AutoTraderService:
             detail = self._scanner_service.get_signal(result.symbol)
             stop_loss = detail.risk_analysis.stop_loss if detail and detail.risk_analysis else None
             take_profit = detail.risk_analysis.take_profit_1 if detail and detail.risk_analysis else None
+            take_profit_2 = detail.risk_analysis.take_profit_2 if detail and detail.risk_analysis else None
 
             allocation = self._position_size(run, result.price, stop_loss, risk_multiplier)
-            if allocation < MIN_TRADE_VALUE or allocation > run.cash:
+            effective_cost = allocation * (1 + TRANSACTION_COST_RATE)
+            if allocation < MIN_TRADE_VALUE or effective_cost > run.cash:
                 continue
 
             is_dip_entry = result.symbol not in trend_symbols
@@ -295,14 +374,18 @@ class AutoTraderService:
             )
 
             quantity = allocation / result.price
-            run.cash -= allocation
+            run.cash -= effective_cost
             position = SimulationPosition(
                 run_id=run.id,
                 symbol=result.symbol,
                 quantity=quantity,
-                average_price=result.price,
+                # Cost basis includes the buy-side fee, same as a real
+                # brokerage statement -- see _sell()/_partial_sell() for the
+                # matching sell-side fee that nets out a true round-trip P&L.
+                average_price=result.price * (1 + TRANSACTION_COST_RATE),
                 stop_loss=stop_loss,
                 take_profit=take_profit,
+                take_profit_2=take_profit_2,
                 opened_at=datetime.now(timezone.utc),
             )
             db.add(position)
@@ -344,6 +427,27 @@ class AutoTraderService:
             return 0.5
         return 1.0
 
+    def _passes_long_term_outlook(self, symbol: str) -> bool:
+        """Skips a symbol only on a confirmed-UNFAVORABLE long-term outlook
+        (P/E, margins, growth, leverage, analyst consensus -- see
+        long_term_scoring.py) -- NEUTRAL/INSUFFICIENT_DATA pass through, same
+        fail-open philosophy as the daily-trend gate. get_long_term_outlook()
+        only reads FundamentalsService's cache and the scanner's already-
+        computed indicators, no network call, so this is cheap enough to
+        call per candidate."""
+        if self._fundamentals_service is None:
+            return True
+        outlook = self._fundamentals_service.get_long_term_outlook(symbol)
+        return outlook.label != LongTermOutlookLabel.UNFAVORABLE
+
+    def _compute_equity(self, run: SimulationRun, positions: list[SimulationPosition]) -> float:
+        positions_value = 0.0
+        for p in positions:
+            signal = self._scanner_service.get_signal(p.symbol)
+            price = signal.price if signal is not None else p.average_price
+            positions_value += price * p.quantity
+        return run.cash + positions_value
+
     def _position_size(
         self, run: SimulationRun, entry_price: float, stop_loss: float | None, risk_multiplier: float = 1.0
     ) -> float:
@@ -365,8 +469,9 @@ class AutoTraderService:
         return min(position_value_from_risk, max_position_value)
 
     def _sell(self, db: Session, run: SimulationRun, position: SimulationPosition, price: float, reason: str) -> None:
-        proceeds = position.quantity * price
-        pnl = (price - position.average_price) * position.quantity
+        net_price = price * (1 - TRANSACTION_COST_RATE)
+        proceeds = position.quantity * net_price
+        pnl = (net_price - position.average_price) * position.quantity
         run.cash += proceeds
         run.realized_pnl += pnl
         db.add(SimulationTradeLog(
@@ -451,6 +556,9 @@ class AutoTraderService:
         equity = run.cash + positions_value
         total_return_pct = (equity - run.initial_cash) / run.initial_cash * 100.0 if run.initial_cash else None
 
+        peak_equity = max(run.peak_equity or 0.0, equity)
+        drawdown_pct = (peak_equity - equity) / peak_equity * 100.0 if peak_equity > 0 else 0.0
+
         now = datetime.now(timezone.utc)
         days_remaining = (
             max(0.0, (_as_utc(run.ends_at) - now).total_seconds() / 86400.0)
@@ -473,6 +581,9 @@ class AutoTraderService:
             realized_pnl=round(run.realized_pnl, 2),
             unrealized_pnl=round(unrealized_total, 2),
             total_return_pct=round(total_return_pct, 2) if total_return_pct is not None else None,
+            peak_equity=round(peak_equity, 2),
+            drawdown_pct=round(drawdown_pct, 2),
+            trading_paused=drawdown_pct >= MAX_DRAWDOWN_FRACTION * 100.0,
             trade_count=len(trade_count),
             positions=position_outs,
             recent_trades=[
