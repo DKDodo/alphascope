@@ -20,11 +20,11 @@ Only market data, technical analysis, scanning, news sentiment, and paper
 ## What it does
 
 ```
-Market Data (Mock / BIST) -> Normalizer -> Scanner -> Indicators -> Signal Engine -> Risk Engine -> FastAPI -> Dashboard
-                                                                  -> News Provider -> FinBERT Sentiment ->
+Market Data (Global + BIST, both Yahoo Finance) -> Normalizer -> Scanner -> Indicators -> Signal Engine -> Risk Engine -> FastAPI -> Dashboard
+                                                                          -> News Provider -> FinBERT Sentiment ->
 ```
 
-- Streams synthetic Global (US-style) data and real, Yahoo-delayed BIST 30 data as two independent tabs.
+- Streams real, Yahoo-delayed market data for both Global (ABD) and BIST 30 as two independent tabs.
 - Computes EMA9/20/50/200, RSI14, MACD, ATR14, Bollinger Bands, VWAP, volume ratio, momentum.
 - Scores each symbol 0-100 (Opportunity Score) across Trend/Momentum/Volume/Price Action/Risk-Reward.
 - Classifies a signal: `STRONG_BUY_SETUP`, `BUY_SETUP`, `WATCH`, `NEUTRAL`, `AVOID`.
@@ -96,30 +96,40 @@ kullanır; BIST sekmesi ve haberler Yahoo Finance'e erişim gerektirir). Bu
 dashboard, PyInstaller ile paketlenen `AlphaScope.exe` içine de otomatik
 olarak dahil edilir.
 
-## BIST 30 sekmesi
+## Global (ABD) ve BIST 30 sekmeleri
 
-`MarketContext` mimarisi sayesinde BIST, mock ABD verisinden tamamen
-bağımsız ikinci bir "piyasa" olarak çalışır — kendi provider'ı
-(`YFinanceProvider`, `app/market_data/providers/yfinance_provider.py`),
-kendi tarayıcı durumu ve kendi kağıt portföyü (₺) vardır; biri çökse/yavaşlasa
-diğerini etkilemez.
+`MarketContext` mimarisi sayesinde her piyasa diğerinden tamamen bağımsız bir
+"piyasa" olarak çalışır — kendi provider'ı, kendi tarayıcı durumu ve kendi
+kağıt portföyü (Global: $, BIST: ₺) vardır; biri çökse/yavaşlasa diğerini
+etkilemez. Her iki sekme de **aynı gerçek veri kaynağını** kullanır:
+Yahoo Finance (`yfinance` paketi, `YFinanceProvider`,
+`app/market_data/providers/yfinance_provider.py`), API anahtarı gerekmez.
 
-- **Veri kaynağı:** Yahoo Finance (`yfinance` paketi), API anahtarı gerekmez.
-  Semboller `.IS` uzantısıyla sorgulanır (örn. `THYAO.IS`) ama sistemde ve
-  arayüzde uzantısız gösterilir (`THYAO`).
 - **⚠️ Önemli — gecikme:** Yahoo Finance verisi genellikle **~15-20 dakika
   gecikmelidir** ve bir aracı kurumun gerçek zamanlı emir akışının yerini
-  tutmaz. Dashboard'da BIST sekmesinin üstünde bu uyarı her zaman görünür.
+  tutmaz. Dashboard'da her iki sekmenin üstünde bu uyarı her zaman görünür.
   Gerçek yatırım kararı vermeden önce fiyatı aracı kurumunuzdan mutlaka teyit edin.
-- **Sembol listesi:** `.env` içindeki `BIST_SYMBOLS` — varsayılan olarak 30
-  büyük/likit BIST hissesi gelir, ancak bu **resmi BIST 30 endeks bileşenleri
-  ile birebir aynı olmayabilir** (endeks üyeliği periyodik değişir). Farklı
-  hisse takip etmek için `.env`'de virgülle ayrılmış listeyi düzenlemeniz
-  yeterli, kod değişikliği gerekmez.
-- **Sorgu sıklığı:** `BIST_POLL_INTERVAL_SECONDS` (varsayılan 60sn). Veri zaten
-  gecikmeli olduğundan daha sık sorgulamanın faydası yoktur; gereksiz sorgu
-  Yahoo tarafından geçici olarak sınırlanmanıza (rate limit) yol açabilir.
-- BIST sekmesini tamamen kapatmak isterseniz `.env`'de `BIST_ENABLED=false`.
+- **Global (ABD):** Semboller uzantısız sorgulanır (örn. `AAPL`). Sembol
+  listesi: `.env` içindeki `GLOBAL_SYMBOLS` — varsayılan olarak 8 büyük ABD
+  hissesi (AAPL, MSFT, NVDA, AMD, META, TSLA, AMZN, GOOGL). Sorgu sıklığı:
+  `GLOBAL_POLL_INTERVAL_SECONDS` (varsayılan 60sn).
+- **BIST 30:** Semboller `.IS` uzantısıyla sorgulanır (örn. `THYAO.IS`) ama
+  sistemde ve arayüzde uzantısız gösterilir (`THYAO`). Sembol listesi: `.env`
+  içindeki `BIST_SYMBOLS` — varsayılan olarak 30 büyük/likit BIST hissesi
+  gelir, ancak bu **resmi BIST 30 endeks bileşenleri ile birebir aynı
+  olmayabilir** (endeks üyeliği periyodik değişir). Sorgu sıklığı:
+  `BIST_POLL_INTERVAL_SECONDS` (varsayılan 60sn). BIST sekmesini tamamen
+  kapatmak isterseniz `.env`'de `BIST_ENABLED=false`.
+- Farklı hisse takip etmek için ilgili `.env` değişkenindeki virgülle ayrılmış
+  listeyi düzenlemeniz yeterli, kod değişikliği gerekmez.
+- Veri zaten gecikmeli olduğundan sorgu aralığını çok düşürmenin faydası
+  yoktur; gereksiz sorgu Yahoo tarafından geçici olarak sınırlanmanıza
+  (rate limit) yol açabilir.
+- **Bar birikimi:** Her iki sekme de EMA200 gibi uzun pencereli göstergeler
+  için canlı piyasa saatlerinde biriken ~200 bar'a ihtiyaç duyar (bkz.
+  `bars_available` alanı, sembol detayında gösterilir). Piyasa kapalıyken
+  (örn. ABD borsası kapandığında Global için, ya da gece BIST için) yeni bar
+  gelmez — bu bir hata değildir, normaldir.
 
 ## Haber duyarlılığı (news sentiment)
 
@@ -207,19 +217,21 @@ Tüm tarayıcı/sinyal/haber/portföy uç noktaları `{market}` parametresi alı
 
 See `.env.example`. Key settings:
 
-- `MARKET_DATA_PROVIDER=mock` — works with zero API keys. Set to `massive` and
-  provide `MASSIVE_API_KEY` to use the (skeleton) Massive WebSocket provider;
-  the app automatically falls back to `mock` if the key is missing.
+- `MARKET_DATA_PROVIDER=yfinance` (default) — real, delayed Yahoo Finance data
+  for both tabs, zero API keys. Set to `mock` for synthetic random-walk data
+  (offline dev/testing) or `massive` + `MASSIVE_API_KEY` for the (skeleton)
+  Massive WebSocket provider; `massive` falls back to `yfinance` if the key is missing.
 - `DATABASE_URL=sqlite:///./alphascope.db` — no database server required. Point
   this at Postgres in production without any code changes.
 - `PAPER_TRADING_ONLY=true`, `LIVE_TRADING_ENABLED=false` — must stay this way.
-- `BIST_ENABLED`, `BIST_SYMBOLS`, `BIST_POLL_INTERVAL_SECONDS` — see "BIST 30 sekmesi" above.
+- `GLOBAL_SYMBOLS`, `GLOBAL_POLL_INTERVAL_SECONDS` — see "Global (ABD) ve BIST 30 sekmeleri" above.
+- `BIST_ENABLED`, `BIST_SYMBOLS`, `BIST_POLL_INTERVAL_SECONDS` — see "Global (ABD) ve BIST 30 sekmeleri" above.
 - `NEWS_ENABLED`, `NEWS_POLL_INTERVAL_SECONDS`, `NEWS_MAX_ITEMS_PER_SYMBOL` — see "Haber duyarlılığı" above.
 
 ## Architecture
 
 - `app/market_data/base.py` — `BaseMarketDataProvider` interface every provider implements
-  (mock, Massive, yfinance/BIST, and future Alpaca/Binance/IBKR providers).
+  (yfinance for both Global and BIST, mock, Massive, and future Alpaca/Binance/IBKR providers).
 - `app/services/market_context.py` — bundles one market's universe + provider +
   scanner + news service + paper portfolio; `app/main.py` builds one context per tab
   (`global`, `bist`) so they run and fail independently of each other.

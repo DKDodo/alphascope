@@ -52,7 +52,7 @@ from app.storage.database import Database
 logger = get_logger(__name__)
 
 
-def _build_global_provider(settings: Settings) -> BaseMarketDataProvider:
+def _build_global_provider(settings: Settings, symbols: list[str]) -> BaseMarketDataProvider:
     if settings.market_data_provider == "massive":
         try:
             from app.market_data.providers.massive_provider import MassiveProvider
@@ -60,11 +60,22 @@ def _build_global_provider(settings: Settings) -> BaseMarketDataProvider:
             return MassiveProvider(api_key=settings.massive_api_key)
         except ProviderNotConfiguredError as exc:
             logger.warning(
-                "massive provider not configured (%s); falling back to mock provider", exc
+                "massive provider not configured (%s); falling back to yfinance", exc
             )
-    return MockProvider(
-        tick_interval_seconds=settings.mock_tick_interval_seconds,
-        seed=settings.mock_random_seed,
+    if settings.market_data_provider == "mock":
+        return MockProvider(
+            symbols=symbols,
+            tick_interval_seconds=settings.mock_tick_interval_seconds,
+            seed=settings.mock_random_seed,
+        )
+    # Default: real, delayed Yahoo Finance data — same provider/approach as
+    # BIST (yf.download(), never the cloud-host-unreliable .info endpoint).
+    # US tickers need no suffix.
+    return YFinanceProvider(
+        symbols=symbols,
+        exchange="NASDAQ",
+        poll_interval_seconds=settings.global_poll_interval_seconds,
+        ticker_suffix="",
     )
 
 
@@ -160,13 +171,13 @@ async def lifespan(app: FastAPI):
 
     contexts: dict[str, MarketContext] = {}
 
-    global_universe = Universe(exchange="MOCK")
+    global_universe = Universe(symbols=settings.global_symbol_list, exchange="NASDAQ")
     contexts["global"] = _build_context(
         key="global",
         label="Global (ABD)",
         currency_symbol="$",
         universe=global_universe,
-        provider=_build_global_provider(settings),
+        provider=_build_global_provider(settings, global_universe.symbols),
         settings=settings,
         starting_cash=settings.initial_paper_cash,
         db=db,
@@ -175,6 +186,11 @@ async def lifespan(app: FastAPI):
             ("^GSPC", "S&P 500", "ABD hisse piyasasının genel yönü"),
             ("^VIX", "VIX (Volatilite Endeksi)", "Piyasa risk iştahı — yüksek VIX daha temkinli olun demektir"),
         ],
+        note=(
+            "Yahoo Finance verisi kullanılıyor; fiyatlar yaklaşık 15-20 dakika "
+            "gecikmeli olabilir. Gerçek zamanlı emir kararları için aracı "
+            "kurumunuzun kendi verisini mutlaka teyit edin."
+        ),
     )
 
     if settings.bist_enabled:

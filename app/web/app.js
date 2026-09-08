@@ -192,9 +192,32 @@ async function sembolSec(sembol) {
   }
 }
 
+async function detaySessizYenile() {
+  // Periyodik otomatik yenileme: seçili sembolü sessizce günceller, paneli
+  // önce "Yükleniyor..." durumuna boşaltmaz. Aksi halde her 5 saniyede bir
+  // ~1000px'lik detay paneli tek satıra küçülüp tekrar genişliyor, bu da
+  // sayfanın sürekli aşağı/yukarı zıplaması gibi görünüyordu.
+  const sembol = secilenSembol;
+  if (!sembol) return;
+  const uzunVadeEl = document.getElementById("uzun-vade-icerik");
+  const haberEl = document.getElementById("haber-icerik");
+  const korumaliIcerik = {
+    uzunVade: uzunVadeEl ? uzunVadeEl.innerHTML : null,
+    haber: haberEl ? haberEl.innerHTML : null,
+  };
+
+  try {
+    const detay = await veriCek(`/api/${aktifPazar}/signals/${sembol}`);
+    if (secilenSembol !== sembol) return; // kullanıcı bu sırada başka sembole geçmiş olabilir
+    renderDetay(detay, korumaliIcerik);
+  } catch (err) {
+    // sessiz yenileme başarısız olursa mevcut içeriği olduğu gibi bırak
+  }
+}
+
 const YETERLI_BAR_ESIGI = 250; // EMA200 için gereken tam pencere
 
-function renderDetay(detay) {
+function renderDetay(detay, korumaliIcerik) {
   const icerik = document.getElementById("detay-icerik");
   const kategoriler = detay.category_scores;
   const birim = aktifPazarBilgi().currency_symbol;
@@ -280,9 +303,9 @@ function renderDetay(detay) {
     ${riskHtml || '<p class="detail-empty">Risk analizi için yeterli veri yok.</p>'}
     ${buyZoneHtml}
     <h3 style="font-size:13px;color:var(--accent);margin:18px 0 6px;border-top:1px solid var(--panel-border);padding-top:14px;">📈 Uzun Vadeli Görünüm (Temel Analiz)</h3>
-    <div id="uzun-vade-icerik"><p class="detail-empty">Yükleniyor...</p></div>
+    <div id="uzun-vade-icerik">${(korumaliIcerik && korumaliIcerik.uzunVade) || '<p class="detail-empty">Yükleniyor...</p>'}</div>
     <h3 style="font-size:13px;color:var(--muted);margin:14px 0 6px;">📰 Son Haberler ve Duyarlılık</h3>
-    <div id="haber-icerik"><p class="detail-empty">Yükleniyor...</p></div>
+    <div id="haber-icerik">${(korumaliIcerik && korumaliIcerik.haber) || '<p class="detail-empty">Yükleniyor...</p>'}</div>
     <div class="calc-form">
       <h3>Pozisyon Büyüklüğü Hesaplayıcı</h3>
       <div class="calc-row">
@@ -661,5 +684,5 @@ setInterval(portfoyYenile, 5000);
 setInterval(simulasyonYenile, 5000);
 setInterval(makroYenile, 60000);
 setInterval(() => {
-  if (secilenSembol) sembolSec(secilenSembol);
+  if (secilenSembol) detaySessizYenile();
 }, 5000);

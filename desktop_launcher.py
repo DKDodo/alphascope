@@ -33,7 +33,7 @@ def _configure_environment() -> None:
         )
 
     os.environ.setdefault("ALPHASCOPE_ENV", "development")
-    os.environ.setdefault("MARKET_DATA_PROVIDER", "mock")
+    os.environ.setdefault("MARKET_DATA_PROVIDER", "yfinance")
     os.environ.setdefault("PAPER_TRADING_ONLY", "true")
     os.environ.setdefault("LIVE_TRADING_ENABLED", "false")
 

@@ -17,10 +17,11 @@ RUN pip install --no-cache-dir -r requirements-web.txt
 
 COPY app ./app
 
-# Runtime-only environment: mock global data + real BIST data + news, no
-# API keys, live trading impossible (also enforced in app/config.py).
+# Runtime-only environment: real (delayed) Yahoo Finance data for both
+# Global and BIST + news, no API keys, live trading impossible (also
+# enforced in app/config.py).
 ENV ALPHASCOPE_ENV=production \
-    MARKET_DATA_PROVIDER=mock \
+    MARKET_DATA_PROVIDER=yfinance \
     PAPER_TRADING_ONLY=true \
     LIVE_TRADING_ENABLED=false \
     PYTHONUNBUFFERED=1

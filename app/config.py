@@ -10,7 +10,8 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
     """Central configuration. Defaults keep the app runnable with zero setup:
-    SQLite database, mock market data provider, live trading forced off.
+    SQLite database, real (delayed) Yahoo Finance market data, live trading
+    forced off.
     """
 
     model_config = SettingsConfigDict(
@@ -21,8 +22,12 @@ class Settings(BaseSettings):
     )
 
     environment: str = Field(default="development", validation_alias="ALPHASCOPE_ENV")
-    market_data_provider: Literal["mock", "massive"] = Field(
-        default="mock", validation_alias="MARKET_DATA_PROVIDER"
+    # "yfinance" (real, delayed Yahoo Finance data — the same provider BIST
+    # already uses) is the default for both tabs. "mock" (synthetic random-walk
+    # data, no network) stays available as an explicit opt-in for offline
+    # dev/testing. "massive" requires MASSIVE_API_KEY, else falls back to yfinance.
+    market_data_provider: Literal["mock", "massive", "yfinance"] = Field(
+        default="yfinance", validation_alias="MARKET_DATA_PROVIDER"
     )
     massive_api_key: str | None = Field(default=None, validation_alias="MASSIVE_API_KEY")
 
@@ -53,6 +58,20 @@ class Settings(BaseSettings):
     initial_paper_cash: float = Field(
         default=100_000.0, validation_alias="INITIAL_PAPER_CASH"
     )
+
+    # Global (ABD) tab — real, delayed Yahoo Finance data (no suffix needed
+    # for US tickers). Override GLOBAL_SYMBOLS via .env to track a different list.
+    global_symbols: str = Field(
+        default="AAPL,MSFT,NVDA,AMD,META,TSLA,AMZN,GOOGL",
+        validation_alias="GLOBAL_SYMBOLS",
+    )
+    global_poll_interval_seconds: float = Field(
+        default=60.0, validation_alias="GLOBAL_POLL_INTERVAL_SECONDS"
+    )
+
+    @property
+    def global_symbol_list(self) -> list[str]:
+        return [s.strip().upper() for s in self.global_symbols.split(",") if s.strip()]
 
     bist_enabled: bool = Field(default=True, validation_alias="BIST_ENABLED")
     bist_symbols: str = Field(
