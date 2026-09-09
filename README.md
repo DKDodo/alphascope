@@ -137,6 +137,10 @@ kripto için de ayrı bir borsa entegrasyonu (ccxt vb.) yok, yfinance zaten
   eskirse (bkz. Veri tazeliği aşağıda) bu bir aksama işareti olabilir. Temel
   analiz (F/K, kâr marjı vb.) kripto için anlamsız olduğundan bu sekmede
   gösterilmez. Kapatmak isterseniz `.env`'de `CRYPTO_ENABLED=false`.
+  İsteğe bağlı: `CRYPTO_MARKET_DATA_PROVIDER=binance` ile Yahoo Finance'in
+  60sn'lik gecikmeli polling'i yerine Binance'in ücretsiz, kimlik doğrulama
+  gerektirmeyen WebSocket akışına (gerçek zamanlı, gecikmesiz) geçilebilir —
+  varsayılan `yfinance` kalır, hiçbir şey değişmez.
 - Farklı sembol takip etmek için ilgili `.env` değişkenindeki virgülle
   ayrılmış listeyi düzenlemeniz yeterli, kod değişikliği gerekmez.
 - Veri zaten gecikmeli olduğundan sorgu aralığını çok düşürmenin faydası
@@ -322,6 +326,11 @@ See `.env.example`. Key settings:
 - `GLOBAL_SYMBOLS`, `GLOBAL_POLL_INTERVAL_SECONDS` — see "Global (ABD), BIST 30 ve Kripto sekmeleri" above.
 - `BIST_ENABLED`, `BIST_SYMBOLS`, `BIST_POLL_INTERVAL_SECONDS` — see "Global (ABD), BIST 30 ve Kripto sekmeleri" above.
 - `CRYPTO_ENABLED`, `CRYPTO_SYMBOLS`, `CRYPTO_POLL_INTERVAL_SECONDS` — see "Global (ABD), BIST 30 ve Kripto sekmeleri" above.
+- `CRYPTO_MARKET_DATA_PROVIDER=yfinance` (default) — set to `binance` to switch
+  the crypto tab to Binance's free public WebSocket for real-time data instead
+  of polled/delayed Yahoo Finance. No API key needed. `BINANCE_QUOTE_ASSET=USDT`
+  (default) controls which pair `CRYPTO_SYMBOLS` entries are matched against
+  (e.g. "BTC" → "BTCUSDT").
 - `NEWS_ENABLED`, `NEWS_POLL_INTERVAL_SECONDS`, `NEWS_MAX_ITEMS_PER_SYMBOL` — see "Haber duyarlılığı" above.
 
 ## Architecture

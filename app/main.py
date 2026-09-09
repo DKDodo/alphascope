@@ -42,6 +42,7 @@ from app.fundamentals.fundamentals_service import FundamentalsService
 from app.macro.macro_service import MacroService
 from app.market_data.base import BaseMarketDataProvider
 from app.market_data.models import MarketEvent
+from app.market_data.providers.binance_provider import BinanceProvider
 from app.market_data.providers.mock_provider import MockProvider
 from app.market_data.providers.yfinance_provider import YFinanceProvider
 from app.news.news_service import NewsService
@@ -95,6 +96,22 @@ def _build_global_provider(settings: Settings, symbols: list[str]) -> BaseMarket
         exchange="NASDAQ",
         poll_interval_seconds=settings.global_poll_interval_seconds,
         ticker_suffix="",
+    )
+
+
+def _build_crypto_provider(settings: Settings, symbols: list[str]) -> BaseMarketDataProvider:
+    if settings.crypto_market_data_provider == "binance":
+        # Real-time push feed, no API key/account needed -- see
+        # app/market_data/providers/binance_provider.py's module docstring
+        # for why it subscribes via a message rather than a URL query string.
+        return BinanceProvider(symbols=symbols, quote_asset=settings.binance_quote_asset, exchange="CRYPTO")
+    # Default: unchanged behavior -- same 60s-polled, delayed Yahoo Finance
+    # data as every other tab, until a user explicitly opts in via .env.
+    return YFinanceProvider(
+        symbols=symbols,
+        exchange="CRYPTO",
+        poll_interval_seconds=settings.crypto_poll_interval_seconds,
+        ticker_suffix="-USD",
     )
 
 
@@ -184,10 +201,15 @@ def _build_context(
     event_bus: AsyncEventBus[MarketEvent] = AsyncEventBus()
     scanner_engine = ScannerEngine()
     _seed_scanner_from_db(scanner_engine, db, key, universe.symbols)
-    if isinstance(provider, YFinanceProvider):
-        # Real Yahoo-backed markets only — MockProvider's synthetic prices
-        # would clash with real historical prices seeded this way, and
+    if isinstance(provider, (YFinanceProvider, BinanceProvider)):
+        # Real market data only — MockProvider's synthetic prices would
+        # clash with real historical prices seeded this way, and
         # MassiveProvider has its own (untested here) bar cadence.
+        # BinanceProvider shares yfinance's 1-minute bar cadence (kline_1m),
+        # so splicing yfinance's historical 1-minute bars in front of
+        # Binance's live ones is safe — without this, a fresh Binance-backed
+        # crypto tab would reproduce the same "~200 live polls before
+        # EMA200 is available" problem this backfill already fixed once.
         asyncio.create_task(
             _backfill_cold_symbols(scanner_engine, key, universe.symbols, news_ticker_suffix),
             name=f"{key}-cold-start-backfill",
@@ -379,12 +401,7 @@ async def lifespan(app: FastAPI):
             label="Kripto",
             currency_symbol="$",
             universe=crypto_universe,
-            provider=YFinanceProvider(
-                symbols=crypto_universe.symbols,
-                exchange="CRYPTO",
-                poll_interval_seconds=settings.crypto_poll_interval_seconds,
-                ticker_suffix="-USD",
-            ),
+            provider=_build_crypto_provider(settings, crypto_universe.symbols),
             settings=settings,
             starting_cash=settings.crypto_initial_paper_cash,
             db=db,
@@ -396,18 +413,42 @@ async def lifespan(app: FastAPI):
                 *_COMMON_MACRO_INDICATORS,
             ],
             note=(
-                "Yahoo Finance verisi kullanılıyor. Kripto piyasası 7/24 açıktır — "
-                "diğer sekmelerden farklı olarak veri uzun süre eskiyorsa bu piyasanın "
-                "kapalı olmasıyla açıklanamaz, veri akışında bir aksama olabilir. "
-                "Gerçek zamanlı emir kararları için kullandığınız borsanın kendi "
-                "verisini mutlaka teyit edin."
+                (
+                    "Binance WebSocket üzerinden gerçek zamanlı (gecikmesiz) veri "
+                    "kullanılıyor. Kripto piyasası 7/24 açıktır — diğer sekmelerden "
+                    "farklı olarak veri uzun süre eskiyorsa bu piyasanın kapalı "
+                    "olmasıyla açıklanamaz, veri akışında bir aksama olabilir."
+                )
+                if settings.crypto_market_data_provider == "binance"
+                else (
+                    "Yahoo Finance verisi kullanılıyor. Kripto piyasası 7/24 açıktır — "
+                    "diğer sekmelerden farklı olarak veri uzun süre eskiyorsa bu piyasanın "
+                    "kapalı olmasıyla açıklanamaz, veri akışında bir aksama olabilir. "
+                    "Gerçek zamanlı emir kararları için kullandığınız borsanın kendi "
+                    "verisini mutlaka teyit edin."
+                )
             ),
         )
 
     app.state.market_contexts = contexts
 
-    for ctx in contexts.values():
-        await ctx.market_service.start()
+    # A provider's connect() can now involve a real network round-trip
+    # (BinanceProvider) rather than always succeeding synchronously
+    # (YFinance/Mock never fail here). One market failing to connect --
+    # a transient network hiccup, a misconfigured opt-in -- must not take
+    # every other market down with it, so each market_service.start() is
+    # isolated; a failed market is logged and left out of this run rather
+    # than crashing the whole app.
+    unavailable_this_run: list[str] = []
+    for key, ctx in contexts.items():
+        try:
+            await ctx.market_service.start()
+        except Exception:  # noqa: BLE001 - one market's connection failure must not crash the app
+            logger.exception(
+                "market data connection failed for '%s' -- this market will be unavailable this run", key
+            )
+            unavailable_this_run.append(key)
+            continue
         await ctx.scanner_service.start()
         if ctx.news_service is not None:
             await ctx.news_service.start()
@@ -421,6 +462,9 @@ async def lifespan(app: FastAPI):
             await ctx.signal_tracking_service.start()
         if ctx.daily_trend_service is not None:
             await ctx.daily_trend_service.start()
+
+    for key in unavailable_this_run:
+        del contexts[key]
 
     try:
         yield

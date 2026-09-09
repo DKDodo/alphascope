@@ -135,6 +135,22 @@ class Settings(BaseSettings):
     def crypto_symbol_list(self) -> list[str]:
         return [s.strip().upper() for s in self.crypto_symbols.split(",") if s.strip()]
 
+    # Optional opt-in for real-time (push, not polled) data via Binance's
+    # free public WebSocket (no API key/account needed), instead of the
+    # default (60s-polled, ~15-20min-delayed) YFinanceProvider every other
+    # tab uses. Independent of MARKET_DATA_PROVIDER, which only affects the
+    # Global (ABD) tab (see _build_global_provider) -- defaults to
+    # "yfinance" so nobody's crypto tab silently switches feeds without
+    # opting in via .env.
+    crypto_market_data_provider: Literal["yfinance", "binance"] = Field(
+        default="yfinance", validation_alias="CRYPTO_MARKET_DATA_PROVIDER"
+    )
+    # Quote asset Binance pairs are built against (e.g. CRYPTO_SYMBOLS'
+    # "BTC" -> "BTCUSDT"). A single global setting, not per-symbol: USDT
+    # already has the deepest/most liquid market for every symbol in the
+    # default CRYPTO_SYMBOLS list.
+    binance_quote_asset: str = Field(default="USDT", validation_alias="BINANCE_QUOTE_ASSET")
+
     news_enabled: bool = Field(default=True, validation_alias="NEWS_ENABLED")
     news_poll_interval_seconds: float = Field(
         default=900.0, validation_alias="NEWS_POLL_INTERVAL_SECONDS"

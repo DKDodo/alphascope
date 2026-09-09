@@ -57,6 +57,7 @@ _NORMALIZERS = {
     "mock": _normalize_bar_payload,
     "yfinance": _normalize_bar_payload,
     "massive": _normalize_massive,
+    "binance": _normalize_bar_payload,
 }
 
 
