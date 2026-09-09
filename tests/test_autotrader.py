@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import threading
 from datetime import datetime, timedelta, timezone
 
 import pytest
 from pydantic import ValidationError
+from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
+from sqlalchemy.pool import StaticPool
 
 from app.autotrader.autotrader_service import (
     AutoTraderService,
@@ -986,3 +989,42 @@ def test_trailing_stop_falls_back_to_atr_when_only_one_fixed_pct_is_set_on_the_r
     svc._tick_sync()  # ATR trailing candidate: 110 - 1.5*1.0 = 108.5 (NOT 110*0.95=104.5)
 
     assert svc.get_status().positions[0].stop_loss == pytest.approx(108.5)
+
+
+def test_run_lock_is_a_real_threading_lock(session_factory, scanner):
+    svc = _service(session_factory, scanner)
+    assert isinstance(svc._run_lock, type(threading.Lock()))
+
+
+def test_stop_run_blocks_while_the_lock_is_held_by_another_thread(scanner):
+    # Deterministic (not timing-dependent): if the lock is genuinely held,
+    # a concurrent stop_run() on another thread cannot possibly finish
+    # until it's released -- this is exactly the race the lock closes (a
+    # tick mid-commit racing a concurrent stop_run(), see
+    # AutoTraderService.__init__'s _run_lock docstring).
+    #
+    # Needs its own StaticPool-backed engine rather than the shared
+    # session_factory fixture: plain sqlite:///:memory: hands out a fresh,
+    # empty in-memory database per connection, so a session opened from the
+    # thread below wouldn't see the tables/rows the main thread created.
+    engine = create_engine(
+        "sqlite:///:memory:", connect_args={"check_same_thread": False}, poolclass=StaticPool
+    )
+    Base.metadata.create_all(bind=engine)
+    session_factory = sessionmaker(bind=engine, autoflush=False, autocommit=False)
+
+    svc = _service(session_factory, scanner)
+    svc.start_run(initial_cash=10_000.0, duration_days=7.0)
+
+    svc._run_lock.acquire()
+    try:
+        thread = threading.Thread(target=svc.stop_run)
+        thread.start()
+        thread.join(timeout=0.3)
+        assert thread.is_alive(), "stop_run() must block while _run_lock is held elsewhere"
+    finally:
+        svc._run_lock.release()
+
+    thread.join(timeout=2.0)
+    assert not thread.is_alive(), "stop_run() must complete once the lock is released"
+    assert svc.get_status().status.value == "COMPLETED"

@@ -70,6 +70,7 @@ Design choices, made explicit because they directly shape the results:
 from __future__ import annotations
 
 import asyncio
+import threading
 from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import select
@@ -178,6 +179,19 @@ class AutoTraderService:
         self._news_service = news_service
         self._task: asyncio.Task | None = None
         self._stopping = False
+        # Guards every mutation of this market's active run (start_run,
+        # stop_run, _tick_sync) -- _tick_sync already runs on a worker
+        # thread (via asyncio.to_thread in _loop below); start_run/stop_run
+        # are moved onto worker threads too (see app/api/routes/simulation.py)
+        # specifically so this lock never blocks the event loop, only the
+        # thread that's waiting on it. Without this, a tick mid-way through
+        # committing a position could race a concurrent stop_run(): stop_run
+        # loads+liquidates+commits first, then the tick's own commit
+        # overwrites cash from its now-stale in-memory value (silently
+        # discarding the liquidation proceeds) and inserts a new position
+        # against a run that's already COMPLETED -- a permanent phantom
+        # that's never processed again.
+        self._run_lock = threading.Lock()
 
     async def start(self) -> None:
         self._stopping = False
@@ -209,7 +223,7 @@ class AutoTraderService:
         stop_loss_pct: float | None = None,
         take_profit_pct: float | None = None,
     ) -> SimulationStatusOut:
-        with self._session() as db:
+        with self._run_lock, self._session() as db:
             active = self._get_active_run(db)
             if active is not None:
                 raise RiskCalculationError(
@@ -244,7 +258,7 @@ class AutoTraderService:
         position at the current market price (same mark-to-market close the
         scheduled end-of-run uses) and marks it COMPLETED. Irreversible --
         there's no "resume", the user has to start a fresh run."""
-        with self._session() as db:
+        with self._run_lock, self._session() as db:
             run = self._get_active_run(db)
             if run is None:
                 raise RiskCalculationError("Durdurulacak çalışan bir simülasyon yok.")
@@ -265,7 +279,7 @@ class AutoTraderService:
     # -- tick: the actual trading logic, called periodically ---------------------------
 
     def _tick_sync(self) -> None:
-        with self._session() as db:
+        with self._run_lock, self._session() as db:
             run = self._get_active_run(db)
             if run is None:
                 return
