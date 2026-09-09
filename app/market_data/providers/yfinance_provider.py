@@ -91,38 +91,51 @@ class YFinanceProvider(BaseMarketDataProvider):
     def _parse_download(self, data: Any, symbols: list[str], tickers: list[str]) -> list[dict[str, Any]]:
         import pandas as pd
 
+        # yf.download(group_by="ticker") returns MultiIndex columns even for
+        # a single-item ticker list (verified live -- len(tickers) > 1 alone
+        # is NOT a reliable signal here) -- see app/backtest/historical_data.py,
+        # where this exact heuristic was first found wrong and fixed. Using
+        # the old heuristic here left `frame` as the raw MultiIndex frame
+        # whenever exactly one symbol was subscribed, so `last["Volume"]`/
+        # `last["Open"]` etc. below raised KeyError every poll -- silently
+        # swallowed by stream()'s broad except, so that symbol (or, since
+        # every subscribed symbol is parsed in one call, potentially the
+        # market's entire universe if it's down to one symbol) never got a
+        # live bar again.
+        is_multi_indexed = isinstance(data.columns, pd.MultiIndex)
+
         results: list[dict[str, Any]] = []
         for symbol, ticker in zip(symbols, tickers):
             try:
-                frame = data[ticker] if len(tickers) > 1 else data
+                frame = data[ticker] if is_multi_indexed else data
                 frame = frame.dropna(how="all")
                 if frame.empty:
                     continue
                 last = frame.iloc[-1]
                 bar_time = frame.index[-1].to_pydatetime()
+
+                if self._last_bar_time.get(symbol) == bar_time:
+                    continue  # no new bar published since the last poll
+                self._last_bar_time[symbol] = bar_time
+
+                if bar_time.tzinfo is None:
+                    bar_time = bar_time.replace(tzinfo=timezone.utc)
+
+                volume = last["Volume"]
+                results.append(
+                    {
+                        "symbol": symbol,
+                        "asset_class": AssetClass.EQUITY,
+                        "exchange": self._exchange,
+                        "timestamp": bar_time,
+                        "event_type": EventType.BAR,
+                        "open": float(last["Open"]),
+                        "high": float(last["High"]),
+                        "low": float(last["Low"]),
+                        "close": float(last["Close"]),
+                        "volume": 0.0 if pd.isna(volume) else float(volume),
+                    }
+                )
             except (KeyError, IndexError):
                 continue
-
-            if self._last_bar_time.get(symbol) == bar_time:
-                continue  # no new bar published since the last poll
-            self._last_bar_time[symbol] = bar_time
-
-            if bar_time.tzinfo is None:
-                bar_time = bar_time.replace(tzinfo=timezone.utc)
-
-            volume = last["Volume"]
-            results.append(
-                {
-                    "symbol": symbol,
-                    "asset_class": AssetClass.EQUITY,
-                    "exchange": self._exchange,
-                    "timestamp": bar_time,
-                    "event_type": EventType.BAR,
-                    "open": float(last["Open"]),
-                    "high": float(last["High"]),
-                    "low": float(last["Low"]),
-                    "close": float(last["Close"]),
-                    "volume": 0.0 if pd.isna(volume) else float(volume),
-                }
-            )
         return results

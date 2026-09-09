@@ -47,14 +47,28 @@ def fetch_daily_trends(symbols: list[str], ticker_suffix: str = "") -> dict[str,
 
 
 def _parse_download(data: Any, symbols: list[str], tickers: list[str]) -> dict[str, DailyTrend]:
+    import pandas as pd
+
+    # yf.download(group_by="ticker") returns MultiIndex columns even for a
+    # single-item ticker list (verified live -- len(tickers) > 1 alone is
+    # NOT a reliable signal here) -- see app/backtest/historical_data.py,
+    # where this exact heuristic was first found wrong and fixed. The old
+    # heuristic left `frame` as the raw MultiIndex frame whenever a
+    # market's whole universe was down to one symbol, so frame["Close"]
+    # raised KeyError -- caught below, but silently: that symbol got no
+    # DailyTrend entry, get_trend() returned None forever, and the
+    # daily-trend gate stayed permanently (and invisibly) disabled for it.
+    is_multi_indexed = isinstance(data.columns, pd.MultiIndex)
+
     now = datetime.now(timezone.utc)
     results: dict[str, DailyTrend] = {}
     for symbol, ticker in zip(symbols, tickers):
         try:
-            frame = data[ticker] if len(tickers) > 1 else data
+            frame = data[ticker] if is_multi_indexed else data
             frame = frame.dropna(how="all")
             closes = frame["Close"].dropna().tolist()
         except (KeyError, IndexError):
+            logger.warning("daily trend parse failed for %s -- no trend data this cycle", symbol)
             continue
         if not closes:
             continue

@@ -38,6 +38,22 @@ def test_parse_download_single_ticker_unwraps_flat_frame():
     assert results["AAPL"].trend_up is True
 
 
+def test_parse_download_single_ticker_is_multiindexed_like_real_yfinance():
+    """Verified live: yf.download(tickers=[one_item], group_by="ticker")
+    returns MultiIndex columns even for a single-item ticker list -- the
+    previous len(tickers) > 1 heuristic got this wrong (treated it as a
+    flat frame), so frame["Close"] raised KeyError every poll whenever a
+    market's whole universe was down to one symbol, silently and
+    permanently disabling the daily-trend gate for it."""
+    closes = [100.0 + i * 0.5 for i in range(260)]
+    data = pd.concat({"AAPL": _daily_frame(closes)}, axis=1)  # real yfinance shape, one symbol
+
+    results = _parse_download(data, ["AAPL"], ["AAPL"])
+
+    assert "AAPL" in results
+    assert results["AAPL"].trend_up is True
+
+
 def test_parse_download_insufficient_history_returns_no_trend():
     closes = [100.0 + i for i in range(30)]  # well under EMA200's 200-bar floor
     data = _daily_frame(closes)

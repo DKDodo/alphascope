@@ -42,6 +42,24 @@ def test_parse_download_single_ticker_unwraps_flat_frame():
     assert events[0]["close"] == 301
 
 
+def test_parse_download_single_ticker_is_multiindexed_like_real_yfinance():
+    """Verified live: yf.download(tickers=[one_item], group_by="ticker")
+    returns MultiIndex columns even for a single-item ticker list -- the
+    previous len(tickers) > 1 heuristic got this wrong (treated it as a
+    flat frame), so last["Volume"]/last["Open"] etc. raised an uncaught
+    KeyError every poll, silently swallowed by stream()'s broad except,
+    whenever a market's whole universe was down to one symbol."""
+    provider = YFinanceProvider(symbols=["THYAO"])
+    thyao = _bar_frame([300], [302], [299], [301], [1000])
+    data = pd.concat({"THYAO.IS": thyao}, axis=1)  # real yfinance shape, one symbol
+
+    events = provider._parse_download(data, ["THYAO"], ["THYAO.IS"])
+
+    assert len(events) == 1
+    assert events[0]["symbol"] == "THYAO"
+    assert events[0]["close"] == 301
+
+
 def test_parse_download_skips_duplicate_bar_on_repeat_poll():
     provider = YFinanceProvider(symbols=["THYAO"])
     data = _bar_frame([300], [302], [299], [301], [1000])
