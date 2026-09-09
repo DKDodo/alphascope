@@ -101,6 +101,15 @@
       <div class="stat"><span class="stat-label">Gerçekleşen K/Z</span><span class="stat-value" id="pf-gerceklesen">-</span></div>
       <div class="stat"><span class="stat-label">Gerçekleşmeyen K/Z</span><span class="stat-value" id="pf-gerceklesmeyen">-</span></div>
     </div>
+    <div class="sim-start-form">
+      <label>Sembol
+        <input type="text" id="pf-al-sembol" placeholder="örn. AAPL" autocomplete="off" />
+      </label>
+      <label>Adet
+        <input type="number" id="pf-al-adet" placeholder="0" min="0" step="any" />
+      </label>
+      <button id="pf-al-btn">Al</button>
+    </div>
     <table class="portfolio-table">
       <thead>
         <tr>
@@ -109,10 +118,11 @@
           <th>Ort. Maliyet</th>
           <th>Güncel Fiyat</th>
           <th>K/Z</th>
+          <th></th>
         </tr>
       </thead>
       <tbody id="pozisyon-govde">
-        <tr><td colspan="5" class="empty-row">Açık pozisyon yok.</td></tr>
+        <tr><td colspan="6" class="empty-row">Açık pozisyon yok.</td></tr>
       </tbody>
     </table>
     <div class="sim-trades-table">

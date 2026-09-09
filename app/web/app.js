@@ -631,7 +631,7 @@ async function portfoyYenile() {
     const govde = document.getElementById("pozisyon-govde");
     govde.innerHTML = "";
     if (pf.positions.length === 0) {
-      govde.innerHTML = '<tr><td colspan="5" class="empty-row">Açık pozisyon yok.</td></tr>';
+      govde.innerHTML = '<tr><td colspan="6" class="empty-row">Açık pozisyon yok.</td></tr>';
     } else {
       for (const pos of pf.positions) {
         const pnl = (pos.current_price - pos.average_price) * pos.quantity;
@@ -642,6 +642,7 @@ async function portfoyYenile() {
           <td>${paraBirimli(pos.average_price)}</td>
           <td>${paraBirimli(pos.current_price)}</td>
           <td class="${pnl >= 0 ? "pnl-pos" : "pnl-neg"}">${paraBirimli(pnl)}</td>
+          <td><button class="pf-sat-btn" data-symbol="${pos.symbol}" data-adet="${pos.quantity}">Sat</button></td>
         `;
         govde.appendChild(tr);
       }
@@ -664,6 +665,62 @@ async function portfoyYenile() {
     console.error(err);
   }
 }
+
+async function portfoyAl() {
+  const sembolEl = document.getElementById("pf-al-sembol");
+  const adetEl = document.getElementById("pf-al-adet");
+  const sembol = sembolEl.value.trim().toUpperCase();
+  const adet = parseFloat(adetEl.value);
+  if (!sembol || !adet || adet <= 0) {
+    alert("Geçerli bir sembol ve adet girin.");
+    return;
+  }
+  const btn = document.getElementById("pf-al-btn");
+  btn.disabled = true;
+  btn.textContent = "Alınıyor...";
+  try {
+    await veriCek(`/api/${aktifPazar}/portfolio/buy`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ symbol: sembol, quantity: adet }),
+    });
+    sembolEl.value = "";
+    adetEl.value = "";
+    await portfoyYenile();
+  } catch (err) {
+    alert("Alım başarısız: " + err.message);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "Al";
+  }
+}
+
+async function portfoySat(sembol, adet, btn) {
+  if (!confirm(`${sembol} için elinizdeki ${paraFormat(adet)} adedin tamamını satmak istediğinize emin misiniz?`)) {
+    return;
+  }
+  btn.disabled = true;
+  btn.textContent = "Satılıyor...";
+  try {
+    await veriCek(`/api/${aktifPazar}/portfolio/sell`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ symbol: sembol, quantity: adet }),
+    });
+    await portfoyYenile();
+  } catch (err) {
+    alert("Satış başarısız: " + err.message);
+    btn.disabled = false;
+    btn.textContent = "Sat";
+  }
+}
+
+document.getElementById("pf-al-btn").addEventListener("click", portfoyAl);
+document.getElementById("pozisyon-govde").addEventListener("click", (e) => {
+  const btn = e.target.closest(".pf-sat-btn");
+  if (!btn) return;
+  portfoySat(btn.dataset.symbol, parseFloat(btn.dataset.adet), btn);
+});
 
 document.getElementById("min-skor").addEventListener("input", (e) => {
   document.getElementById("min-skor-deger").textContent = e.target.value;
