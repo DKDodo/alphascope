@@ -38,3 +38,17 @@ class SymbolNewsSummary(BaseModel):
         "gerçek olayların doğruluğunu teyit etmez ve yatırım tavsiyesi değildir. "
         "Kaynak haberi mutlaka kendiniz okuyun."
     )
+
+
+class RelevantNewsVerdict(BaseModel):
+    """Internal, trading-decision-only verdict -- never served by an API
+    route (see SymbolNewsSummary.disclaimer for the user-facing display
+    equivalent). See app/news/relevance.py."""
+    symbol: str
+    overall: SentimentLabel  # recomputed from ONLY the relevant items below
+    relevant_count: int
+    total_count: int  # NewsService's cached item count before filtering
+    positive_count: int
+    negative_count: int
+    neutral_count: int
+    alias_filtered: bool  # False = fail-open passthrough (no alias data for this symbol)

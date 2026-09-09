@@ -274,9 +274,10 @@ def _build_context(
             day_reset_symbols=frozenset({"BTC-USD"}),
         )
 
-    # Built after fundamentals_service/macro_service so both can be handed
-    # in — AutoTrader uses sector data for diversification and VIX for
-    # risk-derated position sizing (see AutoTraderService._process_entries).
+    # Built after fundamentals_service/macro_service/news_service so all
+    # three can be handed in — AutoTrader uses sector data for
+    # diversification, VIX for risk-derated position sizing, and filtered
+    # news sentiment as an entry gate (see AutoTraderService._process_entries).
     autotrader_service = AutoTraderService(
         session_factory=db.session_factory,
         market=key,
@@ -285,6 +286,7 @@ def _build_context(
         tick_interval_seconds=settings.autotrader_tick_interval_seconds,
         fundamentals_service=fundamentals_service,
         macro_service=macro_service,
+        news_service=news_service,
     )
 
     signal_tracking_service = SignalTrackingService(

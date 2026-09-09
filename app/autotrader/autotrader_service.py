@@ -49,6 +49,13 @@ Design choices, made explicit because they directly shape the results:
   (see app/fundamentals/long_term_scoring.py) is confirmed UNFAVORABLE --
   a strong short-term setup on a fundamentally deteriorating company is
   exactly the kind of divergence worth being cautious about.
+- Both entry paths likewise skip a symbol whose recent news sentiment reads
+  a confirmed NEGATIVE, after filtering the cached headlines down to ones
+  that actually name the company (see app/news/relevance.py and
+  app/news/symbol_aliases.py -- Yahoo attributes a lot of headlines to a
+  symbol that are really general market noise or another company's story)
+  with at least MIN_RELEVANT_HEADLINES_FOR_NEWS_GATE relevant headlines
+  behind the reading. Same fail-open spirit as every other optional gate here.
 - Portfolio-level circuit breaker: once a run's equity has drawn down
   MAX_DRAWDOWN_FRACTION from its peak, new entries pause (existing
   positions keep exiting normally) until it recovers.
@@ -80,6 +87,9 @@ from app.core.logging import get_logger
 from app.fundamentals.fundamentals_service import FundamentalsService
 from app.fundamentals.models import LongTermOutlookLabel
 from app.macro.macro_service import MacroService
+from app.news.models import SentimentLabel
+from app.news.news_service import NewsService
+from app.news.relevance import evaluate_relevant_sentiment
 from app.risk.risk_engine import (
     DEFAULT_STOP_ATR_MULTIPLIER,
     DEFAULT_TP1_ATR_MULTIPLIER,
@@ -130,6 +140,13 @@ AVOID_EXIT_STREAK_REQUIRED = 3
 # defaults imply, so the existing two-step partial-exit mechanism keeps
 # working identically in both modes.
 FIXED_PCT_TP2_RATIO = DEFAULT_TP2_ATR_MULTIPLIER / DEFAULT_TP1_ATR_MULTIPLIER
+# Same "don't act on a thin sample" rule already used elsewhere in this
+# codebase for the identical class of question -- AVOID_EXIT_STREAK_REQUIRED
+# above and app/signals/tracking_repository.py's _MIN_SAMPLES_FOR_SUMMARY are
+# both already 3, so this isn't a fresh guess, it's this project's existing
+# standard for "how many independent observations before a statistic is
+# trustworthy enough to act on."
+MIN_RELEVANT_HEADLINES_FOR_NEWS_GATE = 3
 
 
 def _as_utc(dt: datetime) -> datetime:
@@ -149,6 +166,7 @@ class AutoTraderService:
         tick_interval_seconds: float = 30.0,
         fundamentals_service: FundamentalsService | None = None,
         macro_service: MacroService | None = None,
+        news_service: NewsService | None = None,
     ) -> None:
         self._session_factory = session_factory
         self._market = market
@@ -157,6 +175,7 @@ class AutoTraderService:
         self._tick_interval = tick_interval_seconds
         self._fundamentals_service = fundamentals_service
         self._macro_service = macro_service
+        self._news_service = news_service
         self._task: asyncio.Task | None = None
         self._stopping = False
 
@@ -398,6 +417,7 @@ class AutoTraderService:
             and r.symbol not in open_symbols
             and r.daily_trend_up is not False
             and self._passes_long_term_outlook(r.symbol)
+            and self._passes_news_sentiment(r.symbol)
         ]
         trend_candidates.sort(key=lambda r: r.score, reverse=True)
         trend_symbols = {r.symbol for r in trend_candidates}
@@ -416,6 +436,7 @@ class AutoTraderService:
             and r.symbol not in trend_symbols
             and r.daily_trend_up is not False
             and self._passes_long_term_outlook(r.symbol)
+            and self._passes_news_sentiment(r.symbol)
         ]
 
         # Trend-based candidates get first claim on the limited slots; dip
@@ -523,6 +544,22 @@ class AutoTraderService:
             return True
         outlook = self._fundamentals_service.get_long_term_outlook(symbol)
         return outlook.label != LongTermOutlookLabel.UNFAVORABLE
+
+    def _passes_news_sentiment(self, symbol: str) -> bool:
+        """Skips a symbol only when its recent news sentiment reads a
+        confirmed NEGATIVE after filtering cached headlines down to ones
+        that actually name the company (see app/news/relevance.py) -- Yahoo
+        attributes a lot of headlines to a symbol that are really general
+        market noise or another company's story (empirically verified).
+        Also fails open below MIN_RELEVANT_HEADLINES_FOR_NEWS_GATE relevant
+        headlines -- a single relevant headline is too thin a sample to act
+        on. Same fail-open spirit as every other optional gate here."""
+        if self._news_service is None:
+            return True
+        verdict = evaluate_relevant_sentiment(self._news_service.get_news(symbol), symbol)
+        if verdict.relevant_count < MIN_RELEVANT_HEADLINES_FOR_NEWS_GATE:
+            return True
+        return verdict.overall != SentimentLabel.NEGATIVE
 
     def _compute_equity(self, run: SimulationRun, positions: list[SimulationPosition]) -> float:
         positions_value = 0.0

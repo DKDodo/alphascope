@@ -279,10 +279,10 @@ gösterilir.
   backtest için tek seçenek **günlük** bar — EMA200 artık "200 dakika"
   değil, klasik "200 gün" anlamına geliyor (canlı sistemden daha anlamlı
   bir okuma), ama VWAP günlük barda o günün ortalama fiyatına dejenere olur.
-- Sektör çeşitlendirme ve Uzun Vadeli Görünüm filtreleri **backtest'te
-  yok** — geçmişe dönük nokta-zamanlı temel veri (3 yıl önceki F/K gibi)
-  ücretsiz olarak mevcut değil; bugünün verisini geçmişe uygulamak veri
-  sızıntısı olurdu, o yüzden hiç uygulanmıyor.
+- Sektör çeşitlendirme, Uzun Vadeli Görünüm ve haber duyarlılığı filtreleri
+  **backtest'te yok** — geçmişe dönük nokta-zamanlı temel veri (3 yıl önceki
+  F/K gibi) ya da haber arşivi ücretsiz olarak mevcut değil; bugünün
+  verisini geçmişe uygulamak veri sızıntısı olurdu, o yüzden hiç uygulanmıyor.
 - Günlük trend onayı backtest'te ayrıca hesaplanmıyor — zaten günlük bar
   kullanıldığı için ana trend skoruyla aynı şeyi tekrar eder.
 - VIX bazlı risk küçültme, dip girişleri, zarar tavanı, kısmi kâr alma ve
@@ -381,7 +381,11 @@ See `.env.example`. Key settings:
   none of this touches the Opportunity Score itself, only which symbols the
   simulation actually buys and how large those positions are. Both entry
   paths also skip a symbol whose long-term fundamentals outlook (see
-  "Uzun vadeli görünüm" below) is confirmed UNFAVORABLE. A portfolio-level
+  "Uzun vadeli görünüm" below) is confirmed UNFAVORABLE, and likewise skip
+  one whose recent news sentiment reads a confirmed NEGATIVE once its
+  cached headlines are filtered down to ones that actually name the
+  company (`app/news/relevance.py`, `app/news/symbol_aliases.py`) and
+  there are enough of them to trust the reading. A portfolio-level
   circuit breaker pauses new entries (existing positions keep exiting
   normally) once a run's equity has drawn down `MAX_DRAWDOWN_FRACTION`
   from its peak — visible in the simulation panel as "Zirve Özkaynak".

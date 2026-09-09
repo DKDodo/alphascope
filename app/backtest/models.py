@@ -65,8 +65,9 @@ class BacktestResult(BaseModel):
         "Bu geriye dönük bir simülasyondur; geçmiş performans gelecekteki "
         "sonuçları garanti etmez ve yatırım tavsiyesi değildir. Canlı "
         "sistemin dakikalık penceresinden farklı olarak günlük bar üzerinde "
-        "çalışır; sektör çeşitlendirme ve Uzun Vadeli Görünüm filtreleri "
-        "(geçmişe dönük nokta-zamanlı temel veri bulunmadığından) ve günlük "
-        "trend onayı (zaten günlük bar kullanıldığından gereksiz) "
-        "uygulanmaz. VWAP günlük barda o günün ortalama fiyatına dejenere olur."
+        "çalışır; sektör çeşitlendirme, Uzun Vadeli Görünüm ve haber "
+        "duyarlılığı filtreleri (geçmişe dönük nokta-zamanlı temel veri ya "
+        "da haber arşivi bulunmadığından) ve günlük trend onayı (zaten "
+        "günlük bar kullanıldığından gereksiz) uygulanmaz. VWAP günlük "
+        "barda o günün ortalama fiyatına dejenere olur."
     )

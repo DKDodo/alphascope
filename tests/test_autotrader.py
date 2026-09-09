@@ -11,12 +11,14 @@ from app.autotrader.autotrader_service import (
     FIXED_PCT_TP2_RATIO,
     MAX_CONCURRENT_POSITIONS,
     MAX_DRAWDOWN_FRACTION,
+    MIN_RELEVANT_HEADLINES_FOR_NEWS_GATE,
     TRANSACTION_COST_RATE,
 )
 from app.autotrader.db_models import SimulationPosition, SimulationRun
 from app.core.exceptions import RiskCalculationError
 from app.fundamentals.models import LongTermOutlook, LongTermOutlookLabel
 from app.macro.models import MacroIndicator
+from app.news.models import NewsItem, SentimentLabel, SymbolNewsSummary
 from app.risk.risk_engine import RiskAnalysis, RiskLevel
 from app.signals.models import CategoryScores, DipConfidence, DipOpportunity, SignalResult, SignalType
 from app.storage.database import Base, make_engine
@@ -102,6 +104,33 @@ class _FakeMacroService:
         return [MacroIndicator(symbol="^VIX", label="VIX", description="", price=self._vix, change_pct=None, as_of=None)]
 
 
+class _FakeNewsService:
+    """Minimal stand-in for NewsService: AutoTraderService only calls
+    get_news(). set_news() computes overall the same way news_service.py's
+    _summarize() does, so tests exercise the real majority-vote shape."""
+
+    def __init__(self) -> None:
+        self._summaries: dict[str, SymbolNewsSummary] = {}
+
+    def set_news(self, symbol: str, items: list[NewsItem]) -> None:
+        positive = sum(1 for i in items if i.sentiment == SentimentLabel.POSITIVE)
+        negative = sum(1 for i in items if i.sentiment == SentimentLabel.NEGATIVE)
+        neutral = sum(1 for i in items if i.sentiment == SentimentLabel.NEUTRAL)
+        overall = (
+            SentimentLabel.UNAVAILABLE if not items
+            else SentimentLabel.NEGATIVE if negative > positive and negative >= neutral
+            else SentimentLabel.POSITIVE if positive > negative and positive >= neutral
+            else SentimentLabel.NEUTRAL
+        )
+        self._summaries[symbol.upper()] = SymbolNewsSummary(
+            symbol=symbol.upper(), items=items, positive_count=positive,
+            negative_count=negative, neutral_count=neutral, overall=overall,
+        )
+
+    def get_news(self, symbol: str) -> SymbolNewsSummary | None:
+        return self._summaries.get(symbol.upper())
+
+
 @pytest.fixture
 def session_factory():
     engine = make_engine("sqlite:///:memory:")
@@ -114,10 +143,10 @@ def scanner():
     return _FakeScannerService()
 
 
-def _service(session_factory, scanner, fundamentals=None, macro=None) -> AutoTraderService:
+def _service(session_factory, scanner, fundamentals=None, macro=None, news=None) -> AutoTraderService:
     return AutoTraderService(
         session_factory=session_factory, market="test", currency_symbol="₺", scanner_service=scanner,
-        fundamentals_service=fundamentals, macro_service=macro,
+        fundamentals_service=fundamentals, macro_service=macro, news_service=news,
     )
 
 
@@ -547,6 +576,86 @@ def test_long_term_outlook_favorable_allows_entry_and_unfavorable_still_blocks(s
 
     bought = {p.symbol for p in svc.get_status().positions}
     assert bought == {"GOOD"}
+
+
+def _negative_items(count: int, mention_company: bool) -> list[NewsItem]:
+    title = "Apple shares slide on weak demand" if mention_company else "Dow Jones Futures Fall As Oil Prices Rise"
+    return [NewsItem(title=f"{title} ({i})", sentiment=SentimentLabel.NEGATIVE) for i in range(count)]
+
+
+def test_news_sentiment_allowed_without_a_news_service(session_factory, scanner):
+    svc = _service(session_factory, scanner)  # no news_service at all
+    svc.start_run(initial_cash=10_000.0, duration_days=7.0)
+    scanner.set_signal("AAPL", SignalType.STRONG_BUY_SETUP, price=100.0, stop_loss=95.0, score=90)
+
+    svc._tick_sync()
+
+    assert len(svc.get_status().positions) == 1
+
+
+def test_news_sentiment_allowed_when_no_cached_summary_for_symbol(session_factory, scanner):
+    news = _FakeNewsService()  # never called set_news() for AAPL
+    svc = _service(session_factory, scanner, news=news)
+    svc.start_run(initial_cash=10_000.0, duration_days=7.0)
+    scanner.set_signal("AAPL", SignalType.STRONG_BUY_SETUP, price=100.0, stop_loss=95.0, score=90)
+
+    svc._tick_sync()
+
+    assert len(svc.get_status().positions) == 1
+
+
+def test_news_sentiment_blocks_entry_when_confirmed_negative_after_filtering(session_factory, scanner):
+    news = _FakeNewsService()
+    news.set_news("AAPL", _negative_items(MIN_RELEVANT_HEADLINES_FOR_NEWS_GATE, mention_company=True))
+    svc = _service(session_factory, scanner, news=news)
+    svc.start_run(initial_cash=10_000.0, duration_days=7.0)
+    scanner.set_signal("AAPL", SignalType.STRONG_BUY_SETUP, price=100.0, stop_loss=95.0, score=90)
+
+    svc._tick_sync()
+
+    assert len(svc.get_status().positions) == 0
+
+
+def test_news_sentiment_allows_entry_below_minimum_relevant_headline_count(session_factory, scanner):
+    news = _FakeNewsService()
+    thin_count = MIN_RELEVANT_HEADLINES_FOR_NEWS_GATE - 1
+    news.set_news("AAPL", _negative_items(thin_count, mention_company=True))
+    svc = _service(session_factory, scanner, news=news)
+    svc.start_run(initial_cash=10_000.0, duration_days=7.0)
+    scanner.set_signal("AAPL", SignalType.STRONG_BUY_SETUP, price=100.0, stop_loss=95.0, score=90)
+
+    svc._tick_sync()
+
+    assert len(svc.get_status().positions) == 1  # too thin a sample to act on
+
+
+def test_news_sentiment_allows_entry_when_negative_headlines_are_irrelevant(session_factory, scanner):
+    news = _FakeNewsService()
+    # Enough negative headlines to clear the count bar, but none of them
+    # actually name Apple -- general market noise, exactly the empirically
+    # observed problem this gate is designed around.
+    news.set_news("AAPL", _negative_items(MIN_RELEVANT_HEADLINES_FOR_NEWS_GATE, mention_company=False))
+    svc = _service(session_factory, scanner, news=news)
+    svc.start_run(initial_cash=10_000.0, duration_days=7.0)
+    scanner.set_signal("AAPL", SignalType.STRONG_BUY_SETUP, price=100.0, stop_loss=95.0, score=90)
+
+    svc._tick_sync()
+
+    assert len(svc.get_status().positions) == 1
+
+
+def test_news_sentiment_uses_unfiltered_summary_when_symbol_missing_from_alias_map(session_factory, scanner):
+    news = _FakeNewsService()
+    # "ZZZZ" has no entry in symbol_aliases.py -- falls back to the
+    # unfiltered summary rather than skipping the gate outright.
+    news.set_news("ZZZZ", _negative_items(MIN_RELEVANT_HEADLINES_FOR_NEWS_GATE, mention_company=False))
+    svc = _service(session_factory, scanner, news=news)
+    svc.start_run(initial_cash=10_000.0, duration_days=7.0)
+    scanner.set_signal("ZZZZ", SignalType.STRONG_BUY_SETUP, price=100.0, stop_loss=95.0, score=90)
+
+    svc._tick_sync()
+
+    assert len(svc.get_status().positions) == 0
 
 
 def test_drawdown_circuit_breaker_blocks_new_entries(session_factory, scanner):

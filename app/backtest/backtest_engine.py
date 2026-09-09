@@ -14,10 +14,11 @@ on a lightweight dataclass instead of AutoTraderService's SQLAlchemy-bound
 methods (that coupling isn't worth forcing onto a batch replay loop).
 
 See BacktestResult.disclaimer (app/backtest/models.py) for what's
-deliberately NOT replayed here: sector-diversification and Uzun Vadeli
-Görünüm gates need point-in-time historical fundamentals that aren't
-available for free, and the daily-trend confirmation gate is redundant
-once the base timeframe already IS daily bars.
+deliberately NOT replayed here: sector-diversification, Uzun Vadeli
+Görünüm, and news-sentiment gates need point-in-time historical
+fundamentals/news archives that aren't available for free, and the
+daily-trend confirmation gate is redundant once the base timeframe
+already IS daily bars.
 """
 from __future__ import annotations
 
