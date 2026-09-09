@@ -8,6 +8,7 @@ from sqlalchemy.orm import sessionmaker
 from app.autotrader.autotrader_service import (
     AutoTraderService,
     AVOID_EXIT_STREAK_REQUIRED,
+    FIXED_PCT_TP2_RATIO,
     MAX_CONCURRENT_POSITIONS,
     MAX_DRAWDOWN_FRACTION,
     TRANSACTION_COST_RATE,
@@ -716,3 +717,100 @@ def test_trailing_stop_never_moves_down(session_factory, scanner):
     status = svc.get_status()
     assert len(status.positions) == 1
     assert status.positions[0].stop_loss == pytest.approx(108.5)
+
+
+def test_fixed_pct_mode_derives_stop_and_take_profit_from_entry_price(session_factory, scanner):
+    svc = _service(session_factory, scanner)
+    svc.start_run(initial_cash=10_000.0, duration_days=7.0, stop_loss_pct=5.0, take_profit_pct=10.0)
+    # ATR-derived values are deliberately way off (50/300) to prove the fixed
+    # percentages -- not RiskEngine's numbers -- are what actually gets used.
+    scanner.set_signal("AAPL", SignalType.STRONG_BUY_SETUP, price=100.0, stop_loss=50.0, take_profit_1=300.0)
+    svc._tick_sync()
+
+    status = svc.get_status()
+    assert len(status.positions) == 1
+    assert status.positions[0].stop_loss == pytest.approx(95.0)  # 100 * (1 - 5/100)
+    assert status.positions[0].take_profit == pytest.approx(110.0)  # 100 * (1 + 10/100)
+
+
+def test_fixed_pct_mode_derives_take_profit_2_using_fixed_ratio(session_factory, scanner):
+    svc = _service(session_factory, scanner)
+    svc.start_run(initial_cash=10_000.0, duration_days=7.0, stop_loss_pct=5.0, take_profit_pct=10.0)
+    scanner.set_signal("AAPL", SignalType.STRONG_BUY_SETUP, price=100.0, stop_loss=50.0, take_profit_1=300.0)
+    svc._tick_sync()
+
+    # take_profit_2 isn't directly exposed on SimulationPositionOut -- verify
+    # it via the partial-exit promotion (take_profit becomes TP2's value
+    # once TP1 is hit), exercising the real code path instead of the DB.
+    expected_tp2 = 100.0 * (1 + 10.0 * FIXED_PCT_TP2_RATIO / 100)
+    scanner.set_signal("AAPL", SignalType.BUY_SETUP, price=111.0, stop_loss=50.0, take_profit_1=300.0)
+    svc._tick_sync()  # price >= TP1 (110) -> partial exit, promotes target to TP2
+
+    assert svc.get_status().positions[0].take_profit == pytest.approx(expected_tp2)
+
+
+def test_fixed_pct_mode_trailing_stop_ratchets_up_as_percentage_of_price(session_factory, scanner):
+    svc = _service(session_factory, scanner)
+    # take_profit_pct=50 keeps TP1 (150) well above the prices used here, so
+    # this test isolates the trailing-stop behavior from partial-exit.
+    svc.start_run(initial_cash=10_000.0, duration_days=7.0, stop_loss_pct=5.0, take_profit_pct=50.0)
+    scanner.set_signal("AAPL", SignalType.STRONG_BUY_SETUP, price=100.0, stop_loss=1.0, take_profit_1=1000.0)
+    svc._tick_sync()  # buys at 100, initial stop = 100*(1-0.05) = 95
+
+    # Trailing candidate should be 5% below the NEW price (110*0.95=104.5),
+    # not ATR-derived (the fake's stop_loss=1.0 would imply something wildly different).
+    scanner.set_signal("AAPL", SignalType.BUY_SETUP, price=110.0, stop_loss=1.0, take_profit_1=1000.0)
+    svc._tick_sync()
+
+    assert svc.get_status().positions[0].stop_loss == pytest.approx(104.5)
+
+
+def test_fixed_pct_mode_trailing_stop_never_moves_down(session_factory, scanner):
+    svc = _service(session_factory, scanner)
+    svc.start_run(initial_cash=10_000.0, duration_days=7.0, stop_loss_pct=5.0, take_profit_pct=50.0)
+    scanner.set_signal("AAPL", SignalType.STRONG_BUY_SETUP, price=100.0, stop_loss=1.0, take_profit_1=1000.0)
+    svc._tick_sync()  # stop = 95
+
+    scanner.set_signal("AAPL", SignalType.BUY_SETUP, price=110.0, stop_loss=1.0, take_profit_1=1000.0)
+    svc._tick_sync()  # stop trails to 104.5
+
+    # Price dips slightly; trailing candidate here (108*0.95=102.6) is BELOW
+    # the already-ratcheted 104.5 -- must not move back down.
+    scanner.set_signal("AAPL", SignalType.BUY_SETUP, price=108.0, stop_loss=1.0, take_profit_1=1000.0)
+    svc._tick_sync()
+
+    assert svc.get_status().positions[0].stop_loss == pytest.approx(104.5)
+
+
+def test_fixed_pct_mode_partial_profit_taking_still_works(session_factory, scanner):
+    svc = _service(session_factory, scanner)
+    svc.start_run(initial_cash=10_000.0, duration_days=7.0, stop_loss_pct=5.0, take_profit_pct=10.0)
+    scanner.set_signal("AAPL", SignalType.STRONG_BUY_SETUP, price=100.0, stop_loss=1.0, take_profit_1=1000.0)
+    svc._tick_sync()  # buys at 100; TP1 = 110
+    original_quantity = svc.get_status().positions[0].quantity
+
+    scanner.set_signal("AAPL", SignalType.BUY_SETUP, price=111.0, stop_loss=1.0, take_profit_1=1000.0)
+    svc._tick_sync()  # price >= TP1 (110) -> partial exit
+
+    status = svc.get_status()
+    assert len(status.positions) == 1  # still open, only half closed
+    assert status.positions[0].quantity == pytest.approx(original_quantity / 2)
+    assert "Kısmi" in status.recent_trades[0].reason
+
+
+def test_status_reports_none_for_stop_loss_pct_in_default_atr_mode(session_factory, scanner):
+    svc = _service(session_factory, scanner)
+    svc.start_run(initial_cash=10_000.0, duration_days=7.0)  # stop_loss_pct/take_profit_pct left unset
+
+    status = svc.get_status()
+    assert status.stop_loss_pct is None
+    assert status.take_profit_pct is None
+
+
+def test_status_reports_the_chosen_fixed_percentages(session_factory, scanner):
+    svc = _service(session_factory, scanner)
+    svc.start_run(initial_cash=10_000.0, duration_days=7.0, stop_loss_pct=5.0, take_profit_pct=10.0)
+
+    status = svc.get_status()
+    assert status.stop_loss_pct == pytest.approx(5.0)
+    assert status.take_profit_pct == pytest.approx(10.0)

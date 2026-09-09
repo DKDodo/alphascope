@@ -52,6 +52,12 @@ class SimulationStatusOut(BaseModel):
     peak_equity: float | None = None
     drawdown_pct: float | None = None  # % below peak_equity right now
     trading_paused: bool = False  # true once drawdown_pct >= the circuit breaker threshold
+    # Null when this run uses the default ATR-based stop/target sizing;
+    # set when the user chose fixed percentages at start time instead (see
+    # StartSimulationRequest below) -- shown in the UI so it's clear which
+    # mode a run is in.
+    stop_loss_pct: float | None = None
+    take_profit_pct: float | None = None
     trade_count: int = 0
     positions: list[SimulationPositionOut] = []
     recent_trades: list[SimulationTradeOut] = []
@@ -66,3 +72,8 @@ class SimulationStatusOut(BaseModel):
 class StartSimulationRequest(BaseModel):
     initial_cash: float = 10_000.0
     duration_days: float = 7.0
+    # Optional: fixed-percentage stop-loss/take-profit instead of the
+    # default ATR-based (volatility-adaptive) sizing -- e.g. 5.0 = 5%. Leave
+    # both unset (None) to keep today's ATR-based behavior unchanged.
+    stop_loss_pct: float | None = None
+    take_profit_pct: float | None = None

@@ -20,6 +20,15 @@ Design choices, made explicit because they directly shape the results:
   forces diversification, further reinforced by the sector cap below.
 - Stop-loss trails up (ATR distance from current price) as a position gains,
   never back down: locks in gains instead of giving back a whole reversal.
+- Stop/target sizing defaults to ATR (volatility-adaptive, see RiskEngine),
+  but a run can opt into fixed percentages instead (start_run()'s
+  stop_loss_pct/take_profit_pct, chosen once at start time) -- e.g. "5%
+  stop, 10% target" regardless of the symbol's own volatility. TP2 and the
+  trailing stop derive from the same fixed percentage in that mode (see
+  FIXED_PCT_TP2_RATIO), so the two-step partial exit and trailing-stop
+  mechanics below work identically either way. Backtesting only ever
+  replays the ATR-based default -- a run's chosen fixed percentages aren't
+  historical parameters to validate, just a live trading preference.
 - Persisted to SQLite (see db_models.py) so the run survives a process
   restart — critical for a "7-day" claim to mean anything on a host that
   can sleep/redeploy.
@@ -71,7 +80,11 @@ from app.core.logging import get_logger
 from app.fundamentals.fundamentals_service import FundamentalsService
 from app.fundamentals.models import LongTermOutlookLabel
 from app.macro.macro_service import MacroService
-from app.risk.risk_engine import DEFAULT_STOP_ATR_MULTIPLIER
+from app.risk.risk_engine import (
+    DEFAULT_STOP_ATR_MULTIPLIER,
+    DEFAULT_TP1_ATR_MULTIPLIER,
+    DEFAULT_TP2_ATR_MULTIPLIER,
+)
 from app.services.scanner_service import ScannerService
 from app.signals.models import DipConfidence, SignalResult, SignalType
 
@@ -111,6 +124,12 @@ AUTOTRADER_ENTRY_SCORE_MIN = 60
 # intentional simplification, not a precision claim; the goal in both is
 # just "don't exit on one noisy reading."
 AVOID_EXIT_STREAK_REQUIRED = 3
+# When a run uses fixed-percentage stop/target (see start_run()) instead of
+# ATR sizing, TP2 is still derived as a further extension of TP1 rather than
+# a second user input -- this preserves the same TP2/TP1 ratio the ATR-based
+# defaults imply, so the existing two-step partial-exit mechanism keeps
+# working identically in both modes.
+FIXED_PCT_TP2_RATIO = DEFAULT_TP2_ATR_MULTIPLIER / DEFAULT_TP1_ATR_MULTIPLIER
 
 
 def _as_utc(dt: datetime) -> datetime:
@@ -164,7 +183,13 @@ class AutoTraderService:
 
     # -- public, session-managing API -------------------------------------------------
 
-    def start_run(self, initial_cash: float, duration_days: float) -> SimulationStatusOut:
+    def start_run(
+        self,
+        initial_cash: float,
+        duration_days: float,
+        stop_loss_pct: float | None = None,
+        take_profit_pct: float | None = None,
+    ) -> SimulationStatusOut:
         with self._session() as db:
             active = self._get_active_run(db)
             if active is not None:
@@ -183,6 +208,8 @@ class AutoTraderService:
                 realized_pnl=0.0,
                 peak_equity=initial_cash,
                 currency_symbol=self._currency_symbol,
+                stop_loss_pct=stop_loss_pct,
+                take_profit_pct=take_profit_pct,
             )
             db.add(run)
             db.commit()
@@ -242,7 +269,7 @@ class AutoTraderService:
             signal = self._scanner_service.get_signal(position.symbol)
             if signal is None:
                 continue
-            self._update_trailing_stop(position, signal)
+            self._update_trailing_stop(run, position, signal)
             self._update_avoid_streak(position, signal.signal)
 
             if self._should_take_partial_profit(position, signal.price):
@@ -253,16 +280,26 @@ class AutoTraderService:
             if reason is not None:
                 self._sell(db, run, position, signal.price, reason)
 
-    def _update_trailing_stop(self, position: SimulationPosition, signal: SignalResult) -> None:
-        """Ratchets the stop up as price rises, never back down. Uses current
-        ATR (not the ATR at entry) so the trailing distance adapts if the
-        symbol's volatility changes while the position is open."""
-        if position.stop_loss is None or signal.risk_analysis is None:
+    def _update_trailing_stop(
+        self, run: SimulationRun, position: SimulationPosition, signal: SignalResult
+    ) -> None:
+        """Ratchets the stop up as price rises, never back down. In a fixed-
+        percentage run (run.stop_loss_pct set -- see start_run()), the
+        trailing distance is that same percentage of current price instead
+        of ATR, so the two modes stay conceptually parallel. ATR mode uses
+        current ATR (not the ATR at entry) so the trailing distance adapts if
+        the symbol's volatility changes while the position is open."""
+        if position.stop_loss is None:
             return
-        atr = signal.risk_analysis.atr
-        if atr <= 0:
-            return
-        trailing_candidate = signal.price - atr * TRAILING_STOP_ATR_MULTIPLIER
+        if run.stop_loss_pct is not None:
+            trailing_candidate = signal.price * (1 - run.stop_loss_pct / 100)
+        else:
+            if signal.risk_analysis is None:
+                return
+            atr = signal.risk_analysis.atr
+            if atr <= 0:
+                return
+            trailing_candidate = signal.price - atr * TRAILING_STOP_ATR_MULTIPLIER
         if trailing_candidate > position.stop_loss:
             position.stop_loss = trailing_candidate
 
@@ -394,9 +431,16 @@ class AutoTraderService:
                 continue
 
             detail = self._scanner_service.get_signal(result.symbol)
-            stop_loss = detail.risk_analysis.stop_loss if detail and detail.risk_analysis else None
-            take_profit = detail.risk_analysis.take_profit_1 if detail and detail.risk_analysis else None
-            take_profit_2 = detail.risk_analysis.take_profit_2 if detail and detail.risk_analysis else None
+            if run.stop_loss_pct is not None and run.take_profit_pct is not None:
+                # User-chosen fixed percentages (see start_run()) override
+                # RiskEngine's ATR-based sizing entirely for this run.
+                stop_loss = result.price * (1 - run.stop_loss_pct / 100)
+                take_profit = result.price * (1 + run.take_profit_pct / 100)
+                take_profit_2 = result.price * (1 + run.take_profit_pct * FIXED_PCT_TP2_RATIO / 100)
+            else:
+                stop_loss = detail.risk_analysis.stop_loss if detail and detail.risk_analysis else None
+                take_profit = detail.risk_analysis.take_profit_1 if detail and detail.risk_analysis else None
+                take_profit_2 = detail.risk_analysis.take_profit_2 if detail and detail.risk_analysis else None
 
             allocation = self._position_size(run, result.price, stop_loss, risk_multiplier)
             effective_cost = allocation * (1 + TRANSACTION_COST_RATE)
@@ -624,6 +668,8 @@ class AutoTraderService:
             peak_equity=round(peak_equity, 2),
             drawdown_pct=round(drawdown_pct, 2),
             trading_paused=drawdown_pct >= MAX_DRAWDOWN_FRACTION * 100.0,
+            stop_loss_pct=run.stop_loss_pct,
+            take_profit_pct=run.take_profit_pct,
             trade_count=len(trade_count),
             positions=position_outs,
             recent_trades=[

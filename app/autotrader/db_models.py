@@ -33,6 +33,14 @@ class SimulationRun(Base):
     # existed in production; see Database.ensure_columns().
     peak_equity: Mapped[float] = mapped_column(Float, default=0.0)
     currency_symbol: Mapped[str] = mapped_column(String(5), default="")
+    # Null (the default) means new positions this run size stop/target off
+    # ATR, same as always. When the user sets both at start time instead,
+    # _process_entries()/_update_trailing_stop() derive stop/target/trailing
+    # from these percentages of price rather than RiskEngine's ATR multiples
+    # -- see AutoTraderService. Added after this table already existed in
+    # production; see Database.ensure_columns().
+    stop_loss_pct: Mapped[float | None] = mapped_column(Float, nullable=True)
+    take_profit_pct: Mapped[float | None] = mapped_column(Float, nullable=True)
 
     positions: Mapped[list["SimulationPosition"]] = relationship(
         back_populates="run", cascade="all, delete-orphan"

@@ -332,7 +332,11 @@ async def lifespan(app: FastAPI):
     # added after simulation_runs/simulation_positions already had rows in
     # production, so an existing running simulation survives the upgrade
     # (see Database.ensure_columns()).
-    db.ensure_columns("simulation_runs", {"peak_equity": "FLOAT DEFAULT 0.0"})
+    db.ensure_columns("simulation_runs", {
+        "peak_equity": "FLOAT DEFAULT 0.0",
+        "stop_loss_pct": "FLOAT",
+        "take_profit_pct": "FLOAT",
+    })
     db.ensure_columns("simulation_positions", {
         "take_profit_2": "FLOAT",
         "partial_exit_done": "INTEGER DEFAULT 0",

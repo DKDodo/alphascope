@@ -774,8 +774,18 @@ function renderSimulasyon(sim) {
         <label>Süre (gün)
           <input type="number" id="sim-gun" value="7" min="1" max="30" step="1" />
         </label>
+        <label>Zarar-Kes %
+          <input type="number" id="sim-zarar-yuzde" value="5" min="0" step="0.5" />
+        </label>
+        <label>Kâr-Al %
+          <input type="number" id="sim-kar-yuzde" value="10" min="0" step="0.5" />
+        </label>
         <button id="sim-baslat-btn">Simülasyonu Başlat</button>
       </div>
+      <p class="hint" style="text-align:left;">
+        Zarar-Kes/Kâr-Al alanlarını boş bırakırsanız, sabit yüzde yerine sembolün kendi
+        oynaklığına göre otomatik (ATR bazlı) hesaplama kullanılır.
+      </p>
       <p class="detail-empty" style="text-align:left;">${sim.disclaimer}</p>`;
     document.getElementById("sim-baslat-btn").addEventListener("click", simulasyonBaslat);
     return;
@@ -828,6 +838,11 @@ function renderSimulasyon(sim) {
         📉 Zirve Özkaynak: ${birim} ${paraFormat(sim.peak_equity)} — Şu anki düşüş: %${paraFormat(sim.drawdown_pct)}
         ${sim.trading_paused ? ` — <strong style="color:var(--red);">⏸️ Yeni pozisyon açma geçici durduruldu (zarar tavanı aşıldı)</strong>` : ""}
       </p>` : ""}
+    <p class="hint" style="margin:0 0 10px;">
+      ${sim.stop_loss_pct !== null && sim.stop_loss_pct !== undefined
+        ? `🎯 Zarar-Kes: %${paraFormat(sim.stop_loss_pct)} — Kâr-Al: %${paraFormat(sim.take_profit_pct)} (sabit yüzde)`
+        : `🎯 Zarar-Kes/Kâr-Al: ATR bazlı (sembolün kendi oynaklığına göre otomatik)`}
+    </p>
     <div class="portfolio-summary">
       <div class="stat"><span class="stat-label">Başlangıç</span><span class="stat-value">${birim} ${paraFormat(sim.initial_cash)}</span></div>
       <div class="stat"><span class="stat-label">Güncel Toplam Değer</span><span class="stat-value">${birim} ${paraFormat(sim.equity)}</span></div>
@@ -850,6 +865,8 @@ function renderSimulasyon(sim) {
       <div class="sim-start-form" style="margin-top:14px;">
         <label>Yeni Başlangıç Bakiyesi (${birim})<input type="number" id="sim-bakiye" value="${varsayilanBakiye(birim)}" min="100" step="100" /></label>
         <label>Süre (gün)<input type="number" id="sim-gun" value="7" min="1" max="30" step="1" /></label>
+        <label>Zarar-Kes %<input type="number" id="sim-zarar-yuzde" value="5" min="0" step="0.5" /></label>
+        <label>Kâr-Al %<input type="number" id="sim-kar-yuzde" value="10" min="0" step="0.5" /></label>
         <button id="sim-baslat-btn">Yeni Simülasyon Başlat</button>
       </div>` : ""}
     <p class="detail-empty" style="text-align:left;margin-top:10px;">${sim.disclaimer}</p>
@@ -865,13 +882,22 @@ async function simulasyonBaslat() {
   const btn = document.getElementById("sim-baslat-btn");
   const bakiye = parseFloat(document.getElementById("sim-bakiye").value);
   const gun = parseFloat(document.getElementById("sim-gun").value);
+  const zararYuzdeEl = document.getElementById("sim-zarar-yuzde");
+  const karYuzdeEl = document.getElementById("sim-kar-yuzde");
+  const zararYuzde = zararYuzdeEl && zararYuzdeEl.value !== "" ? parseFloat(zararYuzdeEl.value) : null;
+  const karYuzde = karYuzdeEl && karYuzdeEl.value !== "" ? parseFloat(karYuzdeEl.value) : null;
   btn.disabled = true;
   btn.textContent = "Başlatılıyor...";
   try {
     await veriCek(`/api/${aktifPazar}/simulation/start`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ initial_cash: bakiye, duration_days: gun }),
+      body: JSON.stringify({
+        initial_cash: bakiye,
+        duration_days: gun,
+        stop_loss_pct: zararYuzde,
+        take_profit_pct: karYuzde,
+      }),
     });
     await simulasyonYenile();
   } catch (err) {
