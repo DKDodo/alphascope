@@ -1,9 +1,13 @@
-"""Historical daily OHLCV data via yfinance for backtesting -- the same
-batched-download + ticker-shape parsing pattern as
-app/daily_trend/daily_trend_provider.py, but returns full OHLCV bars (not
-just closes) since the replay loop needs everything ScannerEngine.seed_bar()
-takes. Symbols yfinance can't resolve are simply absent from the result --
-never raises, matching the rest of this codebase's yfinance call sites.
+"""Historical OHLCV data via yfinance -- the same batched-download +
+ticker-shape parsing pattern as app/daily_trend/daily_trend_provider.py, but
+returns full OHLCV bars (not just closes) since callers need everything
+ScannerEngine.seed_bar() takes. Symbols yfinance can't resolve are simply
+absent from the result -- never raises, matching the rest of this
+codebase's yfinance call sites.
+
+Two callers: the backtest engine (years of daily bars) and app/main.py's
+live-scanner cold-start backfill (a single day of 1-minute bars, via the
+`interval`/`period` override) -- see _backfill_cold_symbols in app/main.py.
 """
 from __future__ import annotations
 
@@ -17,9 +21,16 @@ logger = get_logger(__name__)
 
 
 def fetch_historical_series(
-    symbols: list[str], ticker_suffix: str = "", years: int = 3
+    symbols: list[str],
+    ticker_suffix: str = "",
+    years: int = 3,
+    interval: str = "1d",
+    period: str | None = None,
 ) -> dict[str, list[HistoricalBar]]:
-    """Batched daily-bar fetch for every symbol in `symbols`, oldest-first."""
+    """Batched bar fetch for every symbol in `symbols`, oldest-first.
+    Defaults to `years` years of daily bars; pass `interval`/`period`
+    directly (e.g. interval="1m", period="1d") to fetch intraday bars
+    instead -- `period` always wins over `years` when both are given."""
     import yfinance as yf
 
     if not symbols:
@@ -29,13 +40,13 @@ def fetch_historical_series(
     try:
         data = yf.download(
             tickers=tickers,
-            period=f"{max(1, years)}y",
-            interval="1d",
+            period=period or f"{max(1, years)}y",
+            interval=interval,
             group_by="ticker",
             progress=False,
             threads=True,
         )
-    except Exception:  # noqa: BLE001 - a bad Yahoo response must not crash the backtest
+    except Exception:  # noqa: BLE001 - a bad Yahoo response must not crash the caller
         logger.exception("historical batch download failed")
         return {}
 

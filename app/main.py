@@ -6,6 +6,7 @@ not implemented anywhere in this codebase.
 """
 from __future__ import annotations
 
+import asyncio
 import sys
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
@@ -31,6 +32,7 @@ from app.api.routes import (
     simulation,
 )
 from app.autotrader.autotrader_service import AutoTraderService
+from app.backtest.historical_data import fetch_historical_series
 from app.config import Settings, get_settings
 from app.core.events import AsyncEventBus
 from app.core.exceptions import ProviderNotConfiguredError, RiskCalculationError
@@ -125,6 +127,46 @@ def _seed_scanner_from_db(
         )
 
 
+async def _backfill_cold_symbols(
+    scanner_engine: ScannerEngine, market_key: str, symbols: list[str], ticker_suffix: str
+) -> None:
+    """Runs in the background right after _seed_scanner_from_db, without
+    blocking startup/health checks. Any symbol still with zero bars means
+    the persisted-bar warm start above found nothing for it — most likely a
+    fresh deploy on a host whose disk doesn't survive a redeploy (this app's
+    default SQLite file has no persistent volume configured). Left alone,
+    such a symbol would need ~200 live polls (well over 3 hours, and zero
+    outside trading hours) before indicators needing a long window (EMA200
+    etc.) become available, scoring 0/KAÇININ meanwhile even though real
+    prices are flowing correctly. yfinance's period="1d" already returns
+    the whole current/most-recent session in a single call, so fetch it
+    directly instead of waiting on live polling to rebuild the window one
+    bar at a time — see app/backtest/historical_data.py."""
+    cold_symbols = [s for s in symbols if not scanner_engine.has_data(s)]
+    if not cold_symbols:
+        return
+    try:
+        series = await asyncio.to_thread(
+            fetch_historical_series, cold_symbols, ticker_suffix, interval="1m", period="1d"
+        )
+    except Exception:  # noqa: BLE001 - best-effort warm start, never crash the scanner
+        logger.exception("cold-start backfill failed for market=%s", market_key)
+        return
+
+    total_bars = 0
+    for symbol, bars in series.items():
+        for bar in bars:
+            scanner_engine.seed_bar(
+                symbol, bar.open, bar.high, bar.low, bar.close, bar.volume, bar.timestamp
+            )
+        total_bars += len(bars)
+    if total_bars:
+        logger.info(
+            "cold-start backfill: seeded %s scanner with %d bars across %d symbols from yfinance",
+            market_key, total_bars, len(series),
+        )
+
+
 def _build_context(
     key: str,
     label: str,
@@ -142,6 +184,14 @@ def _build_context(
     event_bus: AsyncEventBus[MarketEvent] = AsyncEventBus()
     scanner_engine = ScannerEngine()
     _seed_scanner_from_db(scanner_engine, db, key, universe.symbols)
+    if isinstance(provider, YFinanceProvider):
+        # Real Yahoo-backed markets only — MockProvider's synthetic prices
+        # would clash with real historical prices seeded this way, and
+        # MassiveProvider has its own (untested here) bar cadence.
+        asyncio.create_task(
+            _backfill_cold_symbols(scanner_engine, key, universe.symbols, news_ticker_suffix),
+            name=f"{key}-cold-start-backfill",
+        )
     signal_engine = SignalEngine(risk_engine=RiskEngine())
     portfolio = PaperPortfolio(starting_cash=starting_cash)
     persisted_portfolio = portfolio_repository.load_state(db.session_factory, key)
