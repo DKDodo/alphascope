@@ -6,7 +6,7 @@ from __future__ import annotations
 from datetime import datetime
 from enum import Enum
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, model_validator
 
 
 class SimulationStatusValue(str, Enum):
@@ -70,10 +70,28 @@ class SimulationStatusOut(BaseModel):
 
 
 class StartSimulationRequest(BaseModel):
-    initial_cash: float = 10_000.0
-    duration_days: float = 7.0
+    # gt=0 + allow_inf_nan=False: a zero/negative initial_cash left a run
+    # permanently stuck "RUNNING" with no trade ever clearing MIN_TRADE_VALUE
+    # (and start_run() refuses a new run while one is active, so this locked
+    # out the whole market); a non-positive duration_days would produce an
+    # ends_at at or before started_at.
+    initial_cash: float = Field(default=10_000.0, gt=0, allow_inf_nan=False)
+    duration_days: float = Field(default=7.0, gt=0, allow_inf_nan=False)
     # Optional: fixed-percentage stop-loss/take-profit instead of the
     # default ATR-based (volatility-adaptive) sizing -- e.g. 5.0 = 5%. Leave
-    # both unset (None) to keep today's ATR-based behavior unchanged.
-    stop_loss_pct: float | None = None
-    take_profit_pct: float | None = None
+    # both unset (None) to keep today's ATR-based behavior unchanged. gt=0
+    # when set: a 0% stop_loss_pct put the initial stop at the entry price
+    # itself, force-closing every position one tick after it opened.
+    stop_loss_pct: float | None = Field(default=None, gt=0, allow_inf_nan=False)
+    take_profit_pct: float | None = Field(default=None, gt=0, allow_inf_nan=False)
+
+    @model_validator(mode="after")
+    def _stop_and_target_pct_must_be_paired(self) -> "StartSimulationRequest":
+        # _process_entries() only switches a run to fixed-percentage sizing
+        # when BOTH are set; a request setting only one would otherwise
+        # silently size new positions off ATR while _update_trailing_stop()
+        # (which only checks stop_loss_pct) trails them at an unrelated
+        # fixed-percentage distance.
+        if (self.stop_loss_pct is None) != (self.take_profit_pct is None):
+            raise ValueError("stop_loss_pct ve take_profit_pct birlikte verilmeli ya da ikisi de boş bırakılmalı.")
+        return self

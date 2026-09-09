@@ -1,6 +1,8 @@
 """Virtual-only paper trading portfolio. No real order is ever sent from here."""
 from __future__ import annotations
 
+import math
+
 from app.core.exceptions import RiskCalculationError
 from app.portfolio.models import PortfolioSnapshot, Position
 
@@ -22,7 +24,14 @@ class PaperPortfolio:
         self._realized_pnl = realized_pnl
 
     def buy(self, symbol: str, quantity: float, price: float) -> Position:
-        if quantity <= 0:
+        # isfinite() rejects NaN/inf alongside the plain <=0 check -- NaN
+        # compares False against everything (quantity<=0 alone lets it
+        # through), and a NaN/inf quantity here would make cost=quantity*price
+        # NaN/inf too, silently defeating the "cost > cash" guard just below
+        # in the same way. The API layer (ManualTradeRequest) already
+        # rejects these before they reach here; this is the same guarantee
+        # enforced at the class's own boundary, for any other caller.
+        if not math.isfinite(quantity) or quantity <= 0:
             raise RiskCalculationError("Adet sıfırdan büyük olmalı.")
         cost = quantity * price
         if cost > self._cash:
@@ -45,6 +54,12 @@ class PaperPortfolio:
         return position
 
     def sell(self, symbol: str, quantity: float, price: float) -> Position | None:
+        # Same isfinite()+positivity guard as buy(). Without it, a negative
+        # quantity always satisfied "quantity <= existing.quantity" (the
+        # only check that used to exist here), bypassing ownership entirely
+        # and fabricating shares/cash out of nothing.
+        if not math.isfinite(quantity) or quantity <= 0:
+            raise RiskCalculationError("Adet sıfırdan büyük olmalı.")
         existing = self._positions.get(symbol)
         if existing is None or quantity > existing.quantity:
             raise RiskCalculationError("Elinizdeki pozisyondan fazlasını satamazsınız.")

@@ -303,14 +303,23 @@ class AutoTraderService:
         self, run: SimulationRun, position: SimulationPosition, signal: SignalResult
     ) -> None:
         """Ratchets the stop up as price rises, never back down. In a fixed-
-        percentage run (run.stop_loss_pct set -- see start_run()), the
-        trailing distance is that same percentage of current price instead
-        of ATR, so the two modes stay conceptually parallel. ATR mode uses
-        current ATR (not the ATR at entry) so the trailing distance adapts if
-        the symbol's volatility changes while the position is open."""
+        percentage run (both run.stop_loss_pct and take_profit_pct set --
+        see start_run()), the trailing distance is that same percentage of
+        current price instead of ATR, so the two modes stay conceptually
+        parallel. ATR mode uses current ATR (not the ATR at entry) so the
+        trailing distance adapts if the symbol's volatility changes while
+        the position is open.
+
+        Checks both percentages, not just stop_loss_pct, to stay consistent
+        with _process_entries()'s fixed-pct-mode condition -- a run with
+        only one of the two set (StartSimulationRequest's validator now
+        rejects that at the API boundary, but an existing/hand-edited DB row
+        could still have it) must fall back to ATR sizing here too, not
+        trail at a fixed percentage unrelated to how the position was sized
+        at entry."""
         if position.stop_loss is None:
             return
-        if run.stop_loss_pct is not None:
+        if run.stop_loss_pct is not None and run.take_profit_pct is not None:
             trailing_candidate = signal.price * (1 - run.stop_loss_pct / 100)
         else:
             if signal.risk_analysis is None:

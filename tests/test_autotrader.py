@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 
 import pytest
+from pydantic import ValidationError
 from sqlalchemy.orm import sessionmaker
 
 from app.autotrader.autotrader_service import (
@@ -15,6 +16,7 @@ from app.autotrader.autotrader_service import (
     TRANSACTION_COST_RATE,
 )
 from app.autotrader.db_models import SimulationPosition, SimulationRun
+from app.autotrader.models import StartSimulationRequest
 from app.core.exceptions import RiskCalculationError
 from app.fundamentals.models import LongTermOutlook, LongTermOutlookLabel
 from app.macro.models import MacroIndicator
@@ -923,3 +925,64 @@ def test_status_reports_the_chosen_fixed_percentages(session_factory, scanner):
     status = svc.get_status()
     assert status.stop_loss_pct == pytest.approx(5.0)
     assert status.take_profit_pct == pytest.approx(10.0)
+
+
+@pytest.mark.parametrize("bad_cash", [-10_000.0, 0.0, float("nan"), float("inf")])
+def test_start_simulation_request_rejects_non_positive_or_non_finite_initial_cash(bad_cash):
+    # A non-positive initial_cash used to leave a run permanently stuck
+    # "RUNNING" -- every position size fell below MIN_TRADE_VALUE, so it
+    # never traded, and start_run() refuses a new run while one is active.
+    with pytest.raises(ValidationError):
+        StartSimulationRequest(initial_cash=bad_cash)
+
+
+@pytest.mark.parametrize("bad_duration", [-1.0, 0.0, float("nan")])
+def test_start_simulation_request_rejects_non_positive_duration(bad_duration):
+    with pytest.raises(ValidationError):
+        StartSimulationRequest(duration_days=bad_duration)
+
+
+def test_start_simulation_request_rejects_zero_stop_loss_pct():
+    # A 0% stop_loss_pct put the initial stop at the entry price itself,
+    # force-closing every position one tick after it opened.
+    with pytest.raises(ValidationError):
+        StartSimulationRequest(stop_loss_pct=0.0, take_profit_pct=10.0)
+
+
+def test_start_simulation_request_rejects_stop_loss_pct_without_take_profit_pct():
+    # Only one of the pair set used to silently size entries off ATR while
+    # trailing the stop at an unrelated fixed percentage (see
+    # _update_trailing_stop's docstring).
+    with pytest.raises(ValidationError):
+        StartSimulationRequest(stop_loss_pct=5.0)
+    with pytest.raises(ValidationError):
+        StartSimulationRequest(take_profit_pct=10.0)
+
+
+def test_start_simulation_request_accepts_both_fixed_percentages_or_neither():
+    both = StartSimulationRequest(stop_loss_pct=5.0, take_profit_pct=10.0)
+    assert both.stop_loss_pct == 5.0 and both.take_profit_pct == 10.0
+
+    neither = StartSimulationRequest()
+    assert neither.stop_loss_pct is None and neither.take_profit_pct is None
+
+
+def test_trailing_stop_falls_back_to_atr_when_only_one_fixed_pct_is_set_on_the_run(session_factory, scanner):
+    # The API model now rejects this combination, but a pre-existing/
+    # hand-edited DB row could still have it -- _update_trailing_stop must
+    # fall back to ATR sizing rather than trailing at stop_loss_pct alone,
+    # unrelated to how the position was actually sized at entry.
+    svc = _service(session_factory, scanner)
+    svc.start_run(initial_cash=10_000.0, duration_days=7.0)  # both None
+    with session_factory() as db:
+        run = db.query(SimulationRun).filter(SimulationRun.market == "test").one()
+        run.stop_loss_pct = 5.0  # take_profit_pct left None -- simulates a half-set row
+        db.commit()
+
+    scanner.set_signal("AAPL", SignalType.STRONG_BUY_SETUP, price=100.0, stop_loss=95.0, take_profit_1=200.0)
+    svc._tick_sync()  # buys at 100, ATR-based stop=95 (fake's ATR=1.0)
+
+    scanner.set_signal("AAPL", SignalType.BUY_SETUP, price=110.0, stop_loss=95.0, take_profit_1=200.0)
+    svc._tick_sync()  # ATR trailing candidate: 110 - 1.5*1.0 = 108.5 (NOT 110*0.95=104.5)
+
+    assert svc.get_status().positions[0].stop_loss == pytest.approx(108.5)

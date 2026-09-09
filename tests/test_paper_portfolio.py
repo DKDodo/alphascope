@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import pytest
+from pydantic import ValidationError
 
 from app.core.exceptions import RiskCalculationError
-from app.portfolio.models import Position
+from app.portfolio.models import ManualTradeRequest, Position
 from app.portfolio.paper_portfolio import PaperPortfolio
 
 
@@ -91,3 +92,56 @@ def test_restored_portfolio_continues_trading_normally():
     snap = pf.snapshot()
     assert snap.realized_pnl == pytest.approx(100.0)
     assert len(snap.positions) == 0
+
+
+def test_buy_rejects_nan_quantity():
+    # NaN compares False against everything, including "<=0" -- verifies
+    # isfinite() actually catches what a plain positivity check would miss.
+    pf = PaperPortfolio(starting_cash=10_000.0)
+    with pytest.raises(RiskCalculationError):
+        pf.buy("AAPL", float("nan"), 100.0)
+    assert pf.snapshot().cash == 10_000.0  # must not have been corrupted to NaN
+
+
+def test_buy_rejects_infinite_quantity():
+    pf = PaperPortfolio(starting_cash=10_000.0)
+    with pytest.raises(RiskCalculationError):
+        pf.buy("AAPL", float("inf"), 100.0)
+
+
+def test_sell_rejects_negative_quantity():
+    # Before the isfinite()+positivity guard, a negative quantity always
+    # satisfied "quantity <= existing.quantity", bypassing ownership
+    # entirely and fabricating shares/cash out of nothing.
+    pf = PaperPortfolio(starting_cash=10_000.0)
+    pf.buy("AAPL", 5.0, 100.0)
+    with pytest.raises(RiskCalculationError):
+        pf.sell("AAPL", -1_000_000.0, 100.0)
+    snap = pf.snapshot()
+    assert snap.positions[0].quantity == 5.0  # unchanged
+    assert snap.cash == pytest.approx(10_000.0 - 500.0)  # unchanged by the rejected sell
+
+
+def test_sell_rejects_nan_quantity():
+    pf = PaperPortfolio(starting_cash=10_000.0)
+    pf.buy("AAPL", 5.0, 100.0)
+    with pytest.raises(RiskCalculationError):
+        pf.sell("AAPL", float("nan"), 100.0)
+
+
+def test_sell_rejects_zero_quantity():
+    pf = PaperPortfolio(starting_cash=10_000.0)
+    pf.buy("AAPL", 5.0, 100.0)
+    with pytest.raises(RiskCalculationError):
+        pf.sell("AAPL", 0.0, 100.0)
+
+
+@pytest.mark.parametrize("bad_quantity", [-5.0, 0.0, float("nan"), float("inf"), float("-inf")])
+def test_manual_trade_request_rejects_non_positive_or_non_finite_quantity(bad_quantity):
+    with pytest.raises(ValidationError):
+        ManualTradeRequest(symbol="AAPL", quantity=bad_quantity)
+
+
+def test_manual_trade_request_accepts_a_normal_quantity():
+    req = ManualTradeRequest(symbol="AAPL", quantity=10.0)
+    assert req.quantity == 10.0
