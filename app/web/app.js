@@ -690,6 +690,13 @@ async function simulasyonYenile() {
   }
 }
 
+function varsayilanBakiye(birim) {
+  // BIST TL bazlı olduğu için Global/Kripto'nun dolar bakiyesiyle aynı sayısal
+  // varsayılanı paylaşırsa (10000) pozisyonlar gerçekçi olmayacak kadar küçük
+  // kalır -- bkz. AutoTraderService'in %risk-bazlı boyutlandırması.
+  return birim === "₺" ? 1_000_000 : 10_000;
+}
+
 function renderSimulasyon(sim) {
   const kutu = document.getElementById("simulasyon-icerik");
   const birim = sim.currency_symbol;
@@ -705,7 +712,7 @@ function renderSimulasyon(sim) {
       </p>
       <div class="sim-start-form">
         <label>Başlangıç Bakiyesi (${birim})
-          <input type="number" id="sim-bakiye" value="10000" min="100" step="100" />
+          <input type="number" id="sim-bakiye" value="${varsayilanBakiye(birim)}" min="100" step="100" />
         </label>
         <label>Süre (gün)
           <input type="number" id="sim-gun" value="7" min="1" max="30" step="1" />
@@ -784,7 +791,7 @@ function renderSimulasyon(sim) {
     </div>
     ${sim.status === "COMPLETED" ? `
       <div class="sim-start-form" style="margin-top:14px;">
-        <label>Yeni Başlangıç Bakiyesi (${birim})<input type="number" id="sim-bakiye" value="10000" min="100" step="100" /></label>
+        <label>Yeni Başlangıç Bakiyesi (${birim})<input type="number" id="sim-bakiye" value="${varsayilanBakiye(birim)}" min="100" step="100" /></label>
         <label>Süre (gün)<input type="number" id="sim-gun" value="7" min="1" max="30" step="1" /></label>
         <button id="sim-baslat-btn">Yeni Simülasyon Başlat</button>
       </div>` : ""}
