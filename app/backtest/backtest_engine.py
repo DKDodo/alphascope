@@ -54,6 +54,15 @@ from app.signals.signal_engine import SignalEngine
 logger = get_logger(__name__)
 
 _TRADING_DAYS_PER_YEAR = 252
+# Crypto trades every calendar day (no exchange sessions/weekends), so a
+# daily-bar backtest produces ~365 bars/year for it vs. ~252 for
+# Global/BIST -- annualizing with the equity-market constant understated
+# crypto's Sharpe by ~(1 - sqrt(252/365)) ~= 17%.
+_CALENDAR_DAYS_PER_YEAR = 365
+
+
+def _annualization_days(market: str) -> int:
+    return _CALENDAR_DAYS_PER_YEAR if market == "crypto" else _TRADING_DAYS_PER_YEAR
 
 
 @dataclass
@@ -99,9 +108,19 @@ def run_backtest(
         signals_today: dict[str, SignalResult] = {}
         for symbol, engine in scanner_engines.items():
             bar = bars_by_date[symbol].get(current_date)
-            if bar is not None:
-                engine.seed_bar(symbol, bar.open, bar.high, bar.low, bar.close, bar.volume, bar.timestamp)
-                portfolio.update_market_price(symbol, bar.close)
+            if bar is None:
+                # No fresh bar today (single-symbol gap, exchange holiday
+                # that didn't align with the whole all_dates axis, etc.) --
+                # compute_indicators() would happily return YESTERDAY's
+                # unchanged snapshot from the still-populated deque, and
+                # evaluating that again would double-count it as a fresh
+                # observation (e.g. incrementing the AVOID exit streak twice
+                # for what's really one continued reading). Skip the symbol
+                # entirely for the day instead, matching how the live system
+                # behaves: no new bar/event means no new evaluation.
+                continue
+            engine.seed_bar(symbol, bar.open, bar.high, bar.low, bar.close, bar.volume, bar.timestamp)
+            portfolio.update_market_price(symbol, bar.close)
             ind = engine.compute_indicators(symbol)
             if ind is None:
                 continue
@@ -140,7 +159,7 @@ def run_backtest(
         benchmark_return_pct=_benchmark_return_pct(benchmark_series),
         **_trade_stats(trades),
         max_drawdown_pct=round(max_drawdown * 100.0, 2),
-        sharpe_ratio=_sharpe_ratio(equity_curve),
+        sharpe_ratio=_sharpe_ratio(equity_curve, _annualization_days(market)),
         equity_curve=equity_curve,
         trades=trades,
         symbols_included=len(series),
@@ -358,7 +377,7 @@ def _trade_stats(trades: list[BacktestTrade]) -> dict:
     }
 
 
-def _sharpe_ratio(equity_curve: list[EquityPoint]) -> float | None:
+def _sharpe_ratio(equity_curve: list[EquityPoint], annualization_days: int) -> float | None:
     """Simplified (no risk-free-rate subtraction) annualized Sharpe from
     daily equity returns -- a reasonable simplification for an internal
     decision-support tool, not a precise risk-adjusted-return figure."""
@@ -373,7 +392,7 @@ def _sharpe_ratio(equity_curve: list[EquityPoint]) -> float | None:
     daily_std = pstdev(returns)
     if daily_std == 0:
         return None
-    return round(mean(returns) / daily_std * (_TRADING_DAYS_PER_YEAR ** 0.5), 2)
+    return round(mean(returns) / daily_std * (annualization_days ** 0.5), 2)
 
 
 def _empty_result(

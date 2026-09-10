@@ -8,6 +8,7 @@ import pytest
 from app.autotrader.autotrader_service import AVOID_EXIT_STREAK_REQUIRED
 from app.backtest import backtest_engine
 from app.backtest.backtest_engine import (
+    _TRADING_DAYS_PER_YEAR,
     _OpenPosition,
     _benchmark_return_pct,
     _exit_reason,
@@ -187,14 +188,27 @@ def test_trade_stats_with_no_closed_trades():
 def test_sharpe_ratio_none_for_flat_equity_curve():
     now = datetime.now(timezone.utc)
     curve = [EquityPoint(date=now + timedelta(days=i), equity=10_000.0) for i in range(5)]
-    assert _sharpe_ratio(curve) is None  # zero variance -> undefined, not a divide-by-zero crash
+    # zero variance -> undefined, not a divide-by-zero crash
+    assert _sharpe_ratio(curve, _TRADING_DAYS_PER_YEAR) is None
 
 
 def test_sharpe_ratio_positive_for_a_steadily_rising_curve():
     now = datetime.now(timezone.utc)
     curve = [EquityPoint(date=now + timedelta(days=i), equity=10_000.0 * (1.001 ** i)) for i in range(30)]
-    sharpe = _sharpe_ratio(curve)
+    sharpe = _sharpe_ratio(curve, _TRADING_DAYS_PER_YEAR)
     assert sharpe is not None and sharpe > 0
+
+
+def test_sharpe_ratio_uses_365_day_annualization_for_crypto():
+    # Crypto trades every calendar day (no exchange sessions), so its Sharpe
+    # must scale by sqrt(365), not the equity-market sqrt(252) -- otherwise
+    # it's systematically understated by ~17%.
+    now = datetime.now(timezone.utc)
+    curve = [EquityPoint(date=now + timedelta(days=i), equity=10_000.0 * (1.001 ** i)) for i in range(30)]
+    equity_sharpe = _sharpe_ratio(curve, _TRADING_DAYS_PER_YEAR)
+    crypto_sharpe = _sharpe_ratio(curve, 365)
+    assert crypto_sharpe > equity_sharpe > 0
+    assert crypto_sharpe == pytest.approx(equity_sharpe * (365 / _TRADING_DAYS_PER_YEAR) ** 0.5)
 
 
 # -- entry/exit orchestration, driven with hand-crafted signals (precise,
@@ -329,6 +343,33 @@ def portfolio_is_fully_closed(result) -> bool:
         else:
             open_qty[t.symbol] = open_qty.get(t.symbol, 0.0) - t.quantity
     return all(abs(q) < 1e-6 for q in open_qty.values())
+
+
+def test_gap_day_produces_no_trade_for_the_affected_symbol(monkeypatch):
+    # AAPL trades every day (keeps this date on the all_dates axis); MSFT is
+    # missing exactly one day's bar, simulating a single-symbol data hiccup
+    # rather than a universal exchange holiday (which would already be
+    # absent from every symbol's bars, never reaching this code path).
+    # Before the fix, compute_indicators() would still return MSFT's stale,
+    # unchanged snapshot from the day before -- evaluating that again could
+    # produce a trade "on" a day MSFT never actually had a price for.
+    bars_a = _realistic_uptrend_bars(days=200, base_volume=2_000_000.0, seed=42)
+    bars_b = _realistic_uptrend_bars(days=200, base_volume=2_000_000.0, seed=43)
+    gap_date = bars_b[150].timestamp.date()
+    bars_b_with_gap = [b for b in bars_b if b.timestamp.date() != gap_date]
+
+    monkeypatch.setattr(
+        backtest_engine, "fetch_historical_series",
+        lambda *a, **k: {"AAPL": bars_a, "MSFT": bars_b_with_gap},
+    )
+    monkeypatch.setattr(backtest_engine, "fetch_single_series", lambda *a, **k: [])
+
+    result = run_backtest(
+        market="test", symbols=["AAPL", "MSFT"], ticker_suffix="", benchmark_symbol=None,
+        vix_available=False, initial_cash=10_000.0, years=3,
+    )
+
+    assert not any(t.symbol == "MSFT" and t.date.date() == gap_date for t in result.trades)
 
 
 def test_run_backtest_liquidates_any_position_still_open_at_the_end(monkeypatch):
