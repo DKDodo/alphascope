@@ -114,6 +114,24 @@ VIX_HIGH_THRESHOLD = 30.0  # -> quarter new-position risk
 # ceiling on simultaneous stop-outs -- this catches a genuinely bad streak
 # without tripping on ordinary day-to-day volatility.
 MAX_DRAWDOWN_FRACTION = 0.10
+# BIST's individual names realize much higher volatility than Global's, so
+# the flat 10% ceiling above -- never derived from BIST data, only from the
+# RISK_PER_TRADE_FRACTION arithmetic above -- tripped constantly: a 3y
+# backtest sweep (app/backtest/) found it paused new BIST entries on 487 of
+# 757 trading days (64%), while it never once tripped for Global in the same
+# window. Sweeping the threshold (10/15/20/25/30/50%) against that same 3y
+# BIST history showed the breaker stops binding at all above 20% (17.86%
+# return / 0.50 Sharpe from 20% through 50%, vs 5.13%/0.31 at 10%) -- so 20%
+# is used for BIST instead of disabling the breaker outright, keeping it
+# able to catch a materially worse future stress episode. Global is left at
+# the original 10% (its own equity curve never even reached an 8% drawdown
+# in the same backtest, so loosening it there would be untested, not
+# calibrated) and Crypto is likewise left untouched pending its own sweep.
+BIST_MAX_DRAWDOWN_FRACTION = 0.20
+
+
+def max_drawdown_fraction_for_market(market: str) -> float:
+    return BIST_MAX_DRAWDOWN_FRACTION if market == "bist" else MAX_DRAWDOWN_FRACTION
 PARTIAL_EXIT_FRACTION = 0.5  # fraction of the position closed at TP1
 TRANSACTION_COST_RATE = 0.001  # 0.1% per leg (~0.2% round trip) -- one flat, simple assumption across all 3 markets
 # Calibrated via app/backtest/ against real Global (3y) + BIST (2y) history,
@@ -171,6 +189,7 @@ class AutoTraderService:
     ) -> None:
         self._session_factory = session_factory
         self._market = market
+        self._max_drawdown_fraction = max_drawdown_fraction_for_market(market)
         self._currency_symbol = currency_symbol
         self._scanner_service = scanner_service
         self._tick_interval = tick_interval_seconds
@@ -410,10 +429,10 @@ class AutoTraderService:
         equity = self._compute_equity(run, open_positions)
         run.peak_equity = max(run.peak_equity or 0.0, equity)
         drawdown = (run.peak_equity - equity) / run.peak_equity if run.peak_equity > 0 else 0.0
-        if drawdown >= MAX_DRAWDOWN_FRACTION:
+        if drawdown >= self._max_drawdown_fraction:
             logger.info(
                 "[%s] autotrader paused: drawdown %.1f%% >= %.1f%% circuit breaker (equity=%.2f, peak=%.2f)",
-                self._market, drawdown * 100, MAX_DRAWDOWN_FRACTION * 100, equity, run.peak_equity,
+                self._market, drawdown * 100, self._max_drawdown_fraction * 100, equity, run.peak_equity,
             )
             return  # existing positions still exit normally via _process_exits(); only new entries pause
 
@@ -727,7 +746,7 @@ class AutoTraderService:
             total_return_pct=round(total_return_pct, 2) if total_return_pct is not None else None,
             peak_equity=round(peak_equity, 2),
             drawdown_pct=round(drawdown_pct, 2),
-            trading_paused=drawdown_pct >= MAX_DRAWDOWN_FRACTION * 100.0,
+            trading_paused=drawdown_pct >= self._max_drawdown_fraction * 100.0,
             stop_loss_pct=run.stop_loss_pct,
             take_profit_pct=run.take_profit_pct,
             trade_count=len(trade_count),

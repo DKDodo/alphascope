@@ -32,7 +32,6 @@ from app.autotrader.autotrader_service import (
     AVOID_EXIT_STREAK_REQUIRED,
     DIP_ENTRY_MIN_CONFIDENCE,
     MAX_CONCURRENT_POSITIONS,
-    MAX_DRAWDOWN_FRACTION,
     MAX_POSITION_ALLOCATION_FRACTION,
     MIN_TRADE_VALUE,
     PARTIAL_EXIT_FRACTION,
@@ -41,6 +40,7 @@ from app.autotrader.autotrader_service import (
     TRANSACTION_COST_RATE,
     VIX_ELEVATED_THRESHOLD,
     VIX_HIGH_THRESHOLD,
+    max_drawdown_fraction_for_market,
 )
 from app.backtest.historical_data import fetch_historical_series, fetch_single_series
 from app.backtest.models import BacktestResult, BacktestTrade, EquityPoint
@@ -82,6 +82,7 @@ def run_backtest(
     if not series:
         return _empty_result(market, years, initial_cash, benchmark_symbol, len(symbols))
 
+    max_drawdown_fraction = max_drawdown_fraction_for_market(market)
     bars_by_date = {symbol: {bar.timestamp.date(): bar for bar in bars} for symbol, bars in series.items()}
     all_dates = sorted({d for by_date in bars_by_date.values() for d in by_date})
 
@@ -115,7 +116,7 @@ def run_backtest(
         drawdown = (peak_equity - equity) / peak_equity if peak_equity > 0 else 0.0
         max_drawdown = max(max_drawdown, drawdown)
 
-        if drawdown < MAX_DRAWDOWN_FRACTION and len(open_meta) < MAX_CONCURRENT_POSITIONS:
+        if drawdown < max_drawdown_fraction and len(open_meta) < MAX_CONCURRENT_POSITIONS:
             risk_multiplier = _risk_multiplier_from_vix(vix_by_date.get(current_date))
             _process_entries(portfolio, trades, open_meta, signals_today, risk_multiplier, current_date)
 

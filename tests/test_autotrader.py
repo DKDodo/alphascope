@@ -12,11 +12,13 @@ from sqlalchemy.pool import StaticPool
 from app.autotrader.autotrader_service import (
     AutoTraderService,
     AVOID_EXIT_STREAK_REQUIRED,
+    BIST_MAX_DRAWDOWN_FRACTION,
     FIXED_PCT_TP2_RATIO,
     MAX_CONCURRENT_POSITIONS,
     MAX_DRAWDOWN_FRACTION,
     MIN_RELEVANT_HEADLINES_FOR_NEWS_GATE,
     TRANSACTION_COST_RATE,
+    max_drawdown_fraction_for_market,
 )
 from app.autotrader.db_models import SimulationPosition, SimulationRun
 from app.autotrader.models import StartSimulationRequest
@@ -148,9 +150,9 @@ def scanner():
     return _FakeScannerService()
 
 
-def _service(session_factory, scanner, fundamentals=None, macro=None, news=None) -> AutoTraderService:
+def _service(session_factory, scanner, fundamentals=None, macro=None, news=None, market="test") -> AutoTraderService:
     return AutoTraderService(
-        session_factory=session_factory, market="test", currency_symbol="₺", scanner_service=scanner,
+        session_factory=session_factory, market=market, currency_symbol="₺", scanner_service=scanner,
         fundamentals_service=fundamentals, macro_service=macro, news_service=news,
     )
 
@@ -671,6 +673,49 @@ def test_drawdown_circuit_breaker_blocks_new_entries(session_factory, scanner):
         run = db.query(SimulationRun).filter(SimulationRun.market == "test").one()
         run.peak_equity = 10_000.0
         run.cash = 10_000.0 * (1 - MAX_DRAWDOWN_FRACTION - 0.01)
+        db.commit()
+    scanner.set_signal("AAPL", SignalType.STRONG_BUY_SETUP, price=100.0, stop_loss=95.0, score=90)
+
+    svc._tick_sync()
+
+    assert len(svc.get_status().positions) == 0
+
+
+def test_max_drawdown_fraction_for_market_gives_bist_a_wider_threshold():
+    # A 3y backtest sweep (see the constant's comment in autotrader_service.py)
+    # found the flat 10% breaker paused new BIST entries on 64% of trading
+    # days, vs. 0% for Global -- BIST alone gets a wider, still-calibrated
+    # threshold instead of a guessed one-size-fits-all number.
+    assert max_drawdown_fraction_for_market("bist") == BIST_MAX_DRAWDOWN_FRACTION
+    assert BIST_MAX_DRAWDOWN_FRACTION > MAX_DRAWDOWN_FRACTION
+    assert max_drawdown_fraction_for_market("global") == MAX_DRAWDOWN_FRACTION
+    assert max_drawdown_fraction_for_market("crypto") == MAX_DRAWDOWN_FRACTION
+
+
+def test_drawdown_circuit_breaker_does_not_block_bist_within_its_wider_threshold(session_factory, scanner):
+    svc = _service(session_factory, scanner, market="bist")
+    svc.start_run(initial_cash=10_000.0, duration_days=7.0)
+    # Past the original 10% breaker, but still inside BIST's wider 20% one --
+    # this drawdown must NOT block a new entry for this market.
+    with session_factory() as db:
+        run = db.query(SimulationRun).filter(SimulationRun.market == "bist").one()
+        run.peak_equity = 10_000.0
+        run.cash = 10_000.0 * (1 - MAX_DRAWDOWN_FRACTION - 0.01)
+        db.commit()
+    scanner.set_signal("AAPL", SignalType.STRONG_BUY_SETUP, price=100.0, stop_loss=95.0, score=90)
+
+    svc._tick_sync()
+
+    assert len(svc.get_status().positions) == 1
+
+
+def test_drawdown_circuit_breaker_still_blocks_bist_past_its_own_threshold(session_factory, scanner):
+    svc = _service(session_factory, scanner, market="bist")
+    svc.start_run(initial_cash=10_000.0, duration_days=7.0)
+    with session_factory() as db:
+        run = db.query(SimulationRun).filter(SimulationRun.market == "bist").one()
+        run.peak_equity = 10_000.0
+        run.cash = 10_000.0 * (1 - BIST_MAX_DRAWDOWN_FRACTION - 0.01)
         db.commit()
     scanner.set_signal("AAPL", SignalType.STRONG_BUY_SETUP, price=100.0, stop_loss=95.0, score=90)
 
