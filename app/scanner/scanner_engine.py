@@ -10,12 +10,15 @@ from collections import deque
 from dataclasses import dataclass
 from datetime import datetime
 
+from app.core.logging import get_logger
 from app.indicators.momentum import MacdResult, macd, rsi
 from app.indicators.moving_average import ema
 from app.indicators.volatility import BollingerBands, atr, bollinger_bands
 from app.indicators.volume import momentum as momentum_roc
 from app.indicators.volume import volume_ratio, vwap
 from app.market_data.models import EventType, MarketEvent
+
+logger = get_logger(__name__)
 
 ROLLING_WINDOW = 250
 
@@ -58,13 +61,31 @@ class SymbolState:
         close: float,
         volume: float,
         timestamp: datetime | None = None,
-    ) -> None:
+    ) -> bool:
+        """Appends a new bar, unless it's strictly older than the most
+        recent one already on record -- guards against a historical
+        (seed_bar) bar landing after a live (on_event) one already did for
+        the same symbol, e.g. main.py's cold-start backfill task racing the
+        live provider's own stream() task. Without this, closes[-1] (used
+        everywhere as "current price") could become a stale historical
+        close, and every indicator would compute over an out-of-order
+        window for up to ROLLING_WINDOW subsequent bars. Equal timestamps
+        still go through unchanged (e.g. a legitimate repeat poll). Returns
+        False when rejected, so callers can log it."""
+        if (
+            timestamp is not None
+            and self.timestamps
+            and self.timestamps[-1] is not None
+            and timestamp < self.timestamps[-1]
+        ):
+            return False
         self.opens.append(open_)
         self.highs.append(high)
         self.lows.append(low)
         self.closes.append(close)
         self.volumes.append(volume)
         self.timestamps.append(timestamp)
+        return True
 
 
 class ScannerEngine:
@@ -77,9 +98,12 @@ class ScannerEngine:
         if event.open is None or event.high is None or event.low is None or event.close is None:
             return
         state = self._states.setdefault(event.symbol, SymbolState())
-        state.add_bar(
+        if not state.add_bar(
             event.open, event.high, event.low, event.close, event.volume or 0.0, event.timestamp
-        )
+        ):
+            logger.warning(
+                "out-of-order live bar for %s dropped (older than the last one on record)", event.symbol
+            )
 
     def seed_bar(
         self,
@@ -94,7 +118,10 @@ class ScannerEngine:
         """Same as on_event, but for warm-starting from persisted history at
         startup rather than a live provider event — see bar_repository.py."""
         state = self._states.setdefault(symbol, SymbolState())
-        state.add_bar(open_, high, low, close, volume, timestamp)
+        if not state.add_bar(open_, high, low, close, volume, timestamp):
+            logger.warning(
+                "out-of-order seed bar for %s dropped (older than a live bar that already arrived)", symbol
+            )
 
     def has_data(self, symbol: str) -> bool:
         return symbol in self._states and len(self._states[symbol].closes) > 0
