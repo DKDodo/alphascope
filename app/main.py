@@ -46,6 +46,7 @@ from app.market_data.providers.binance_provider import BinanceProvider
 from app.market_data.providers.mock_provider import MockProvider
 from app.market_data.providers.yfinance_provider import YFinanceProvider
 from app.news.news_service import NewsService
+from app.notifications.notifier import NullNotifier, Notifier, WindowsToastNotifier
 from app.portfolio import portfolio_repository
 from app.portfolio.paper_portfolio import PaperPortfolio
 from app.risk.risk_engine import RiskEngine
@@ -113,6 +114,16 @@ def _build_crypto_provider(settings: Settings, symbols: list[str]) -> BaseMarket
         poll_interval_seconds=settings.crypto_poll_interval_seconds,
         ticker_suffix="-USD",
     )
+
+
+def _build_notifier(settings: Settings) -> Notifier:
+    # Windows toast notifications only make sense on the desktop build --
+    # sys.frozen is how desktop_launcher.py itself already distinguishes
+    # "running as the PyInstaller EXE" from a dev/web-deploy run. The web
+    # deploy always gets NullNotifier, regardless of NOTIFICATIONS_ENABLED.
+    if getattr(sys, "frozen", False) and settings.notifications_enabled:
+        return WindowsToastNotifier()
+    return NullNotifier()
 
 
 def _as_utc(dt: datetime) -> datetime:
@@ -193,6 +204,7 @@ def _build_context(
     settings: Settings,
     starting_cash: float,
     db: Database,
+    notifier: Notifier,
     news_ticker_suffix: str = "",
     macro_indicators: list[tuple[str, str, str]] | None = None,
     note: str | None = None,
@@ -287,6 +299,7 @@ def _build_context(
         fundamentals_service=fundamentals_service,
         macro_service=macro_service,
         news_service=news_service,
+        notifier=notifier,
     )
 
     signal_tracking_service = SignalTrackingService(
@@ -345,6 +358,7 @@ async def lifespan(app: FastAPI):
         "avoid_streak": "INTEGER DEFAULT 0",
     })
     app.state.db = db
+    notifier = _build_notifier(settings)
 
     contexts: dict[str, MarketContext] = {}
 
@@ -358,6 +372,7 @@ async def lifespan(app: FastAPI):
         settings=settings,
         starting_cash=settings.initial_paper_cash,
         db=db,
+        notifier=notifier,
         news_ticker_suffix="",
         macro_indicators=[
             ("^GSPC", "S&P 500", "ABD hisse piyasasının genel yönü"),
@@ -387,6 +402,7 @@ async def lifespan(app: FastAPI):
             settings=settings,
             starting_cash=settings.bist_initial_paper_cash,
             db=db,
+            notifier=notifier,
             news_ticker_suffix=".IS",
             macro_indicators=[
                 ("USDTRY=X", "USD/TRY", "Dolar/TL kuru — TL değer kaybı BIST'teki TL bazlı kazancı eritebilir"),
@@ -411,6 +427,7 @@ async def lifespan(app: FastAPI):
             settings=settings,
             starting_cash=settings.crypto_initial_paper_cash,
             db=db,
+            notifier=notifier,
             news_ticker_suffix="-USD",
             fundamentals_enabled=False,
             macro_indicators=[

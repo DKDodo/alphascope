@@ -19,6 +19,12 @@ pytest-asyncio>=0.24
 # the web deploy (requirements-web.txt).
 pywebview>=5.0
 
+# Desktop build only: Windows Action Center toast notifications for
+# AutoTrader events (app/notifications/notifier.py). Imported lazily there,
+# so its absence on the web deploy is harmless -- WindowsToastNotifier is
+# simply never constructed (see main.py's _build_notifier()).
+winotify>=1.1.0
+
 # News sentiment (FinBERT, runs locally, no API key). Optional in spirit:
 # if these fail to install or load, app/news/sentiment_analyzer.py degrades
 # to SentimentLabel.UNAVAILABLE instead of crashing anything.

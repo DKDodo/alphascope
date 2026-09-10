@@ -25,6 +25,7 @@ python -m PyInstaller --noconfirm --clean --onefile --name AlphaScope -d noarchi
     --copy-metadata filelock --copy-metadata numpy --copy-metadata tqdm ^
     --copy-metadata huggingface-hub --copy-metadata safetensors --copy-metadata pyyaml ^
     --hidden-import app.market_data.providers.massive_provider ^
+    --hidden-import winotify ^
     --add-data "app\web;app\web" ^
     --icon "app_icon.ico" ^
     desktop_launcher.py

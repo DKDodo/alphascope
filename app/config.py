@@ -163,6 +163,11 @@ class Settings(BaseSettings):
         default=60.0, validation_alias="AUTOTRADER_TICK_INTERVAL_SECONDS"
     )
 
+    # Desktop-only Windows toast notifications for AutoTrader events (new
+    # position, drawdown breaker paused) -- see app/notifications/notifier.py.
+    # Ignored entirely on the web deploy, which has no desktop to notify.
+    notifications_enabled: bool = Field(default=True, validation_alias="NOTIFICATIONS_ENABLED")
+
     # How often to check for due signal-performance checkpoints (5/10/20
     # days after a signal change). These are day-scale, so hourly is plenty.
     signal_tracking_interval_seconds: float = Field(
