@@ -90,6 +90,51 @@ def record_trade(
         db.close()
 
 
+def persist_trade(
+    session_factory: sessionmaker[Session],
+    market: str,
+    symbol: str,
+    action: str,
+    price: float,
+    quantity: float,
+    realized_pnl: float | None,
+    cash: float,
+    positions: dict[str, Position],
+    portfolio_realized_pnl: float,
+) -> None:
+    """Combines what save_snapshot() + record_trade() do into a single
+    commit, for callers (the manual buy/sell routes) that need the trade log
+    and the persisted portfolio state to never disagree about whether a
+    trade happened -- as two separate commits, a crash/error between them
+    could leave one written and the other not. save_snapshot()/record_trade()
+    stay as their own functions for callers that only need one half."""
+    db = session_factory()
+    try:
+        db.add(ManualTradeLog(
+            market=market, symbol=symbol, action=action, price=price,
+            quantity=quantity, realized_pnl=realized_pnl, timestamp=datetime.now(timezone.utc),
+        ))
+        state = db.get(ManualPortfolioState, market)
+        if state is None:
+            state = ManualPortfolioState(market=market, cash=cash, realized_pnl=portfolio_realized_pnl)
+            db.add(state)
+        else:
+            state.cash = cash
+            state.realized_pnl = portfolio_realized_pnl
+        db.execute(delete(ManualPortfolioPosition).where(ManualPortfolioPosition.market == market))
+        for position in positions.values():
+            db.add(ManualPortfolioPosition(
+                market=market, symbol=position.symbol,
+                quantity=position.quantity, average_price=position.average_price,
+            ))
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+    finally:
+        db.close()
+
+
 def load_recent_trades(
     session_factory: sessionmaker[Session], market: str, limit: int = 50
 ) -> list[ManualTradeLog]:
