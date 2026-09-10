@@ -332,6 +332,12 @@ See `.env.example`. Key settings:
   (default) controls which pair `CRYPTO_SYMBOLS` entries are matched against
   (e.g. "BTC" → "BTCUSDT").
 - `NEWS_ENABLED`, `NEWS_POLL_INTERVAL_SECONDS`, `NEWS_MAX_ITEMS_PER_SYMBOL` — see "Haber duyarlılığı" above.
+- `ACCESS_PASSWORD` — unset by default, which leaves every `/api/*` route open
+  (correct for the desktop build: it only ever listens on 127.0.0.1). Set this
+  on a web deploy (Render, etc.) to require it before the dashboard will show
+  any data — see `app/auth/session.py` for how the resulting cookie is signed
+  and app.js's login overlay for the frontend side. Rotating this value logs
+  out every existing session at once.
 
 ## Architecture
 
@@ -416,6 +422,14 @@ See `.env.example`. Key settings:
   reading the same live price stream.
 - `app/services/` — background tasks wiring the provider stream into the scanner,
   with reconnect/backoff so a provider outage never crashes the app.
+- `app/notifications/` — desktop-build-only Windows toast notifications for a
+  new AutoTrader position or a drawdown-breaker pause. `NullNotifier` on the
+  web deploy and whenever `NOTIFICATIONS_ENABLED=false`; `AutoTraderService`
+  always has a notifier to call either way, never branches on which.
+- `app/auth/` — a single shared-password gate for the web deploy (see
+  "Configuration" above, `ACCESS_PASSWORD`), not a multi-user accounts
+  system — AlphaScope has no per-user concept. A stateless, signed cookie
+  (`session.py`) rather than server-side session storage.
 
 ## Tests
 
