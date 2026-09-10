@@ -17,6 +17,7 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.api.routes import (
+    auth,
     backtest,
     fundamentals,
     health,
@@ -31,6 +32,7 @@ from app.api.routes import (
     signals,
     simulation,
 )
+from app.auth.session import COOKIE_NAME, is_valid_session_cookie
 from app.autotrader.autotrader_service import AutoTraderService
 from app.backtest.historical_data import fetch_historical_series
 from app.config import Settings, get_settings
@@ -535,15 +537,33 @@ def create_app() -> FastAPI:
         return JSONResponse(status_code=400, content={"detail": str(exc)})
 
     @app.middleware("http")
+    async def _require_auth(request: Request, call_next):
+        # Only /api/* is gated -- the static dashboard shell (index.html/
+        # app.js/style.css) carries no data of its own, and gating it too
+        # would mean a plain HTTP redirect/blank-page instead of the JS
+        # login overlay app.js shows on a 401 from here. /auth/login itself
+        # isn't under /api/, so it's naturally exempt without a special case
+        # -- it obviously can't require the cookie it's trying to issue. A
+        # no-op (never even checks the cookie) whenever ACCESS_PASSWORD
+        # isn't set -- the desktop build's default, unchanged behavior.
+        settings = get_settings()
+        path = request.url.path
+        if settings.access_password is not None and path.startswith("/api/"):
+            cookie = request.cookies.get(COOKIE_NAME)
+            if not is_valid_session_cookie(settings.access_password, cookie):
+                return JSONResponse(status_code=401, content={"detail": "Giriş gerekli."})
+        return await call_next(request)
+
+    @app.middleware("http")
     async def _security_headers(request: Request, call_next):
-        # Cheap, safe hardening that doesn't touch CORS (there's no session/
-        # cookie here for a foreign origin to ride -- see MarketContext's
-        # lack of per-user identity -- so the real fix for cross-origin
-        # state-changing requests is adding authentication, not a CORS
-        # policy; a permissive CORSMiddleware would only make that worse).
-        # This closes the cheaper, adjacent gaps: clickjacking (embedding the
-        # shared web-deployed dashboard in a foreign <iframe>) and MIME-
-        # sniffing.
+        # Cheap, safe hardening that doesn't touch CORS. When ACCESS_PASSWORD
+        # is unset there's no session/cookie for a foreign origin to ride in
+        # the first place; when it is set, the session cookie's SameSite=Lax
+        # (app/api/routes/auth.py) already keeps it off cross-site POSTs,
+        # which is the actual CSRF concern -- a permissive CORSMiddleware on
+        # top would only widen the surface, not close it. This closes the
+        # cheaper, adjacent gaps instead: clickjacking (embedding the
+        # dashboard in a foreign <iframe>) and MIME-sniffing.
         response = await call_next(request)
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["X-Frame-Options"] = "DENY"
@@ -551,6 +571,7 @@ def create_app() -> FastAPI:
         return response
 
     app.include_router(health.router)
+    app.include_router(auth.router)
     app.include_router(markets.router)
     app.include_router(market.router)
     app.include_router(scanner.router)

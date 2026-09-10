@@ -56,12 +56,52 @@ function skorRengi(skor) {
 
 async function veriCek(yol, secenekler) {
   const yanit = await fetch(yol, secenekler);
+  if (yanit.status === 401) {
+    girisGoster();
+    throw new Error("Giriş gerekli.");
+  }
   if (!yanit.ok) {
     const govde = await yanit.json().catch(() => ({}));
     throw new Error(govde.detail || `İstek başarısız (${yanit.status})`);
   }
   return yanit.json();
 }
+
+function girisGoster() {
+  document.getElementById("giris-overlay").hidden = false;
+  document.getElementById("giris-sifre").focus();
+}
+
+function girisGizle() {
+  document.getElementById("giris-overlay").hidden = true;
+}
+
+async function girisGonder(olay) {
+  olay.preventDefault();
+  const sifreKutu = document.getElementById("giris-sifre");
+  const hataMetni = document.getElementById("giris-hata");
+  hataMetni.hidden = true;
+  try {
+    const yanit = await fetch("/auth/login", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ password: sifreKutu.value }),
+    });
+    if (!yanit.ok) {
+      hataMetni.hidden = false;
+      sifreKutu.value = "";
+      sifreKutu.focus();
+      return;
+    }
+    girisGizle();
+    baslat();
+  } catch (err) {
+    hataMetni.textContent = "Bağlantı hatası, tekrar deneyin.";
+    hataMetni.hidden = false;
+  }
+}
+
+document.getElementById("giris-form").addEventListener("submit", girisGonder);
 
 function durumGuncelle(baglandi) {
   const el = document.getElementById("baglanti-durumu");

@@ -39,6 +39,13 @@ class Settings(BaseSettings):
     paper_trading_only: bool = Field(default=True, validation_alias="PAPER_TRADING_ONLY")
     live_trading_enabled: bool = Field(default=False, validation_alias="LIVE_TRADING_ENABLED")
 
+    # Unset (default) means no auth at all -- correct for the desktop build,
+    # which only ever listens on 127.0.0.1 and is already private to whoever
+    # is sitting at that machine. Set on the web deploy (Render) to require
+    # this single shared password before any /api/* route responds -- see
+    # app/auth/session.py for why a password gate, not real accounts.
+    access_password: str | None = Field(default=None, validation_alias="ACCESS_PASSWORD")
+
     # Free-tier hosts (e.g. Render's 0.1 CPU / 512MB plan) have very little
     # headroom — recomputing every symbol's indicators every few seconds
     # was found in production to starve the event loop badly enough that

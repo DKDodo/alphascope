@@ -18,6 +18,17 @@
 <meta name="apple-mobile-web-app-title" content="AlphaScope" />
 </head>
 <body>
+<div class="giris-overlay" id="giris-overlay" hidden>
+  <form class="giris-kutu" id="giris-form">
+    <span class="brand-mark">A</span>
+    <h2>AlphaScope</h2>
+    <p>Devam etmek için şifreyi girin.</p>
+    <input type="password" id="giris-sifre" placeholder="Şifre" autocomplete="current-password" autofocus />
+    <button type="submit">Giriş Yap</button>
+    <p class="giris-hata" id="giris-hata" hidden>Şifre hatalı.</p>
+  </form>
+</div>
+
 <header class="topbar">
   <div class="brand">
     <span class="brand-mark">A</span>
