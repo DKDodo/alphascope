@@ -6,7 +6,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 
-from sqlalchemy import create_engine, text
+from sqlalchemy import create_engine, event, text
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
 
@@ -15,8 +15,25 @@ class Base(DeclarativeBase):
 
 
 def make_engine(database_url: str):
-    connect_args = {"check_same_thread": False} if database_url.startswith("sqlite") else {}
-    return create_engine(database_url, connect_args=connect_args)
+    is_sqlite = database_url.startswith("sqlite")
+    # timeout=30: how long a connection waits for a lock before raising
+    # "database is locked" (SQLite's own default is 5s) -- scanner, news,
+    # fundamentals and AutoTrader all write to this one file concurrently
+    # from different threads, so a write landing mid-commit from another
+    # thread needs real headroom, not five seconds.
+    connect_args = {"check_same_thread": False, "timeout": 30} if is_sqlite else {}
+    engine = create_engine(database_url, connect_args=connect_args)
+    if is_sqlite:
+        # WAL lets readers proceed while a writer holds the file (SQLite's
+        # default rollback-journal mode blocks them) -- a persistent,
+        # per-database-file setting, but cheap to reissue on every new
+        # connection since it's a no-op once already WAL.
+        @event.listens_for(engine, "connect")
+        def _set_sqlite_wal(dbapi_connection, connection_record) -> None:
+            cursor = dbapi_connection.cursor()
+            cursor.execute("PRAGMA journal_mode=WAL")
+            cursor.close()
+    return engine
 
 
 def make_session_factory(engine) -> sessionmaker[Session]:

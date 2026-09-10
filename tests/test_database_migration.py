@@ -52,3 +52,15 @@ def test_ensure_columns_noop_on_a_freshly_created_table():
     db.ensure_columns(
         "simulation_positions", {"take_profit_2": "FLOAT", "partial_exit_done": "INTEGER DEFAULT 0"}
     )
+
+
+def test_sqlite_engine_uses_wal_journal_mode(tmp_path):
+    # The scanner, AutoTrader, news and fundamentals services all write to
+    # this one file concurrently from different threads -- WAL lets readers
+    # proceed while a writer holds it, instead of blocking behind SQLite's
+    # default rollback-journal lock.
+    db_path = tmp_path / "wal_test.db"
+    db = Database(f"sqlite:///{db_path}")
+    with db.engine.connect() as conn:
+        mode = conn.execute(text("PRAGMA journal_mode")).scalar()
+    assert mode.lower() == "wal"

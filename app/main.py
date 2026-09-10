@@ -517,6 +517,22 @@ def create_app() -> FastAPI:
     async def _risk_error_handler(request: Request, exc: RiskCalculationError) -> JSONResponse:
         return JSONResponse(status_code=400, content={"detail": str(exc)})
 
+    @app.middleware("http")
+    async def _security_headers(request: Request, call_next):
+        # Cheap, safe hardening that doesn't touch CORS (there's no session/
+        # cookie here for a foreign origin to ride -- see MarketContext's
+        # lack of per-user identity -- so the real fix for cross-origin
+        # state-changing requests is adding authentication, not a CORS
+        # policy; a permissive CORSMiddleware would only make that worse).
+        # This closes the cheaper, adjacent gaps: clickjacking (embedding the
+        # shared web-deployed dashboard in a foreign <iframe>) and MIME-
+        # sniffing.
+        response = await call_next(request)
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["X-Frame-Options"] = "DENY"
+        response.headers["Referrer-Policy"] = "same-origin"
+        return response
+
     app.include_router(health.router)
     app.include_router(markets.router)
     app.include_router(market.router)
