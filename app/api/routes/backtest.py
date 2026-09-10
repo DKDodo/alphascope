@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+
 from fastapi import APIRouter, HTTPException, Request
 
 from app.api.deps import get_market_context
@@ -21,7 +23,14 @@ _VIX_AVAILABLE_MARKETS: frozenset[str] = frozenset({"global", "crypto"})
 @router.post("/run")
 async def run_market_backtest(request: Request, market: str, payload: BacktestRequest) -> dict:
     ctx = get_market_context(request, market)
-    result = run_backtest(
+    # run_backtest() is fully synchronous -- several blocking yf.download
+    # calls plus a CPU-bound day-by-day replay loop over years of history --
+    # unlike every other yfinance call site in this codebase, it wasn't
+    # wrapped in asyncio.to_thread. Run directly on the event loop, this
+    # froze the entire app (every other request, every market's AutoTrader
+    # tick) for the whole backtest duration.
+    result = await asyncio.to_thread(
+        run_backtest,
         market=market,
         symbols=ctx.universe.symbols,
         ticker_suffix=_TICKER_SUFFIX_BY_MARKET.get(market, ""),
