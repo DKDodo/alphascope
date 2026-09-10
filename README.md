@@ -389,10 +389,11 @@ See `.env.example`. Key settings:
   circuit breaker pauses new entries (existing positions keep exiting
   normally) once a run's equity has drawn down `MAX_DRAWDOWN_FRACTION`
   from its peak — visible in the simulation panel as "Zirve Özkaynak".
-  BIST gets a wider `BIST_MAX_DRAWDOWN_FRACTION` (20% vs. the default 10%):
-  a 3y backtest sweep found the flat threshold paused new BIST entries on
-  64% of trading days (vs. 0% for Global) because BIST's individual names
-  realize much higher volatility — see `max_drawdown_fraction_for_market()`.
+  BIST and Crypto both get a wider `HIGH_VOLATILITY_MAX_DRAWDOWN_FRACTION`
+  (20% vs. the default 10%): separate 3y backtest sweeps found the flat
+  threshold paused new entries on 64% of BIST's trading days and 70% of
+  Crypto's (vs. 0% for Global) because both realize much higher volatility
+  than Global — see `max_drawdown_fraction_for_market()`.
   Take-profit fires in two steps: half the position closes at TP1, the
   remainder's target is promoted to TP2 with its stop still trailing
   ("Kısmi Kâr Alım" in the trade log). A flat `TRANSACTION_COST_RATE` is

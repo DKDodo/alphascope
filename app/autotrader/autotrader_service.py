@@ -91,6 +91,7 @@ from app.macro.macro_service import MacroService
 from app.news.models import SentimentLabel
 from app.news.news_service import NewsService
 from app.news.relevance import evaluate_relevant_sentiment
+from app.notifications.notifier import NullNotifier, Notifier
 from app.risk.risk_engine import (
     DEFAULT_STOP_ATR_MULTIPLIER,
     DEFAULT_TP1_ATR_MULTIPLIER,
@@ -114,24 +115,28 @@ VIX_HIGH_THRESHOLD = 30.0  # -> quarter new-position risk
 # ceiling on simultaneous stop-outs -- this catches a genuinely bad streak
 # without tripping on ordinary day-to-day volatility.
 MAX_DRAWDOWN_FRACTION = 0.10
-# BIST's individual names realize much higher volatility than Global's, so
-# the flat 10% ceiling above -- never derived from BIST data, only from the
-# RISK_PER_TRADE_FRACTION arithmetic above -- tripped constantly: a 3y
-# backtest sweep (app/backtest/) found it paused new BIST entries on 487 of
-# 757 trading days (64%), while it never once tripped for Global in the same
-# window. Sweeping the threshold (10/15/20/25/30/50%) against that same 3y
-# BIST history showed the breaker stops binding at all above 20% (17.86%
-# return / 0.50 Sharpe from 20% through 50%, vs 5.13%/0.31 at 10%) -- so 20%
-# is used for BIST instead of disabling the breaker outright, keeping it
-# able to catch a materially worse future stress episode. Global is left at
-# the original 10% (its own equity curve never even reached an 8% drawdown
-# in the same backtest, so loosening it there would be untested, not
-# calibrated) and Crypto is likewise left untouched pending its own sweep.
-BIST_MAX_DRAWDOWN_FRACTION = 0.20
+# BIST and Crypto both realize much higher volatility than Global, so the
+# flat 10% ceiling above -- never derived from either's own data, only from
+# the RISK_PER_TRADE_FRACTION arithmetic above -- tripped constantly for
+# both: separate 3y backtest sweeps (app/backtest/) found it paused new
+# entries on 487 of 757 BIST trading days (64%) and 770 of 1097 Crypto
+# trading days (70%), vs. never once for Global in the same windows.
+# Sweeping the threshold (10/15/20/25/30/50%) against each market's own
+# history landed BOTH, independently, on the same "stops binding at all
+# above this" point of 20%: BIST 17.86% return / 0.50 Sharpe (vs 5.13%/0.31
+# at 10%), Crypto 63.11% / 1.02 (vs 19.90%/0.66 at 10%) -- used instead of
+# disabling the breaker outright, so it still catches a materially worse
+# future stress episode. Global is left at the original 10% (its own equity
+# curve never even reached an 8% drawdown in the same backtest, so loosening
+# it there would be untested, not calibrated).
+HIGH_VOLATILITY_MAX_DRAWDOWN_FRACTION = 0.20
+_HIGH_VOLATILITY_MARKETS = frozenset({"bist", "crypto"})
 
 
 def max_drawdown_fraction_for_market(market: str) -> float:
-    return BIST_MAX_DRAWDOWN_FRACTION if market == "bist" else MAX_DRAWDOWN_FRACTION
+    return HIGH_VOLATILITY_MAX_DRAWDOWN_FRACTION if market in _HIGH_VOLATILITY_MARKETS else MAX_DRAWDOWN_FRACTION
+
+
 PARTIAL_EXIT_FRACTION = 0.5  # fraction of the position closed at TP1
 TRANSACTION_COST_RATE = 0.001  # 0.1% per leg (~0.2% round trip) -- one flat, simple assumption across all 3 markets
 # Calibrated via app/backtest/ against real Global (3y) + BIST (2y) history,
@@ -186,6 +191,7 @@ class AutoTraderService:
         fundamentals_service: FundamentalsService | None = None,
         macro_service: MacroService | None = None,
         news_service: NewsService | None = None,
+        notifier: Notifier | None = None,
     ) -> None:
         self._session_factory = session_factory
         self._market = market
@@ -196,6 +202,13 @@ class AutoTraderService:
         self._fundamentals_service = fundamentals_service
         self._macro_service = macro_service
         self._news_service = news_service
+        self._notifier = notifier or NullNotifier()
+        # Tracks which run.id we've already sent a "paused" toast for, so a
+        # tick every self._tick_interval seconds for the rest of a multi-day
+        # pause doesn't resend it every time -- reset to None once equity
+        # recovers, so a later pause (a fresh drawdown, not the same one)
+        # notifies again.
+        self._breaker_notified_for_run: int | None = None
         self._task: asyncio.Task | None = None
         self._stopping = False
         # Guards every mutation of this market's active run (start_run,
@@ -434,7 +447,16 @@ class AutoTraderService:
                 "[%s] autotrader paused: drawdown %.1f%% >= %.1f%% circuit breaker (equity=%.2f, peak=%.2f)",
                 self._market, drawdown * 100, self._max_drawdown_fraction * 100, equity, run.peak_equity,
             )
+            if self._breaker_notified_for_run != run.id:
+                self._notifier.notify(
+                    f"AlphaScope — {self._market.upper()} duraklatıldı",
+                    f"Zirveden %{drawdown * 100:.1f} düşüldü, yeni pozisyon açılmıyor "
+                    f"(özkaynak {equity:.2f}, zirve {run.peak_equity:.2f}).",
+                )
+                self._breaker_notified_for_run = run.id
             return  # existing positions still exit normally via _process_exits(); only new entries pause
+        elif self._breaker_notified_for_run == run.id:
+            self._breaker_notified_for_run = None  # recovered -- a later pause notifies again
 
         if len(open_symbols) >= MAX_CONCURRENT_POSITIONS:
             return
@@ -556,6 +578,10 @@ class AutoTraderService:
             logger.info(
                 "[%s] simulation BUY %s x%.4f @ %.4f (%s)",
                 self._market, result.symbol, quantity, result.price, reason,
+            )
+            self._notifier.notify(
+                f"AlphaScope — {self._market.upper()} yeni pozisyon",
+                f"{result.symbol} x{quantity:.4f} @ {result.price:.2f} — {reason}",
             )
 
     def _risk_multiplier_from_vix(self) -> float:

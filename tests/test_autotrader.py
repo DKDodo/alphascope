@@ -12,8 +12,8 @@ from sqlalchemy.pool import StaticPool
 from app.autotrader.autotrader_service import (
     AutoTraderService,
     AVOID_EXIT_STREAK_REQUIRED,
-    BIST_MAX_DRAWDOWN_FRACTION,
     FIXED_PCT_TP2_RATIO,
+    HIGH_VOLATILITY_MAX_DRAWDOWN_FRACTION,
     MAX_CONCURRENT_POSITIONS,
     MAX_DRAWDOWN_FRACTION,
     MIN_RELEVANT_HEADLINES_FOR_NEWS_GATE,
@@ -138,6 +138,17 @@ class _FakeNewsService:
         return self._summaries.get(symbol.upper())
 
 
+class _FakeNotifier:
+    """Records every notify() call instead of touching the real desktop --
+    AutoTraderService only ever calls .notify(title, message)."""
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, str]] = []
+
+    def notify(self, title: str, message: str) -> None:
+        self.calls.append((title, message))
+
+
 @pytest.fixture
 def session_factory():
     engine = make_engine("sqlite:///:memory:")
@@ -150,10 +161,12 @@ def scanner():
     return _FakeScannerService()
 
 
-def _service(session_factory, scanner, fundamentals=None, macro=None, news=None, market="test") -> AutoTraderService:
+def _service(
+    session_factory, scanner, fundamentals=None, macro=None, news=None, market="test", notifier=None
+) -> AutoTraderService:
     return AutoTraderService(
         session_factory=session_factory, market=market, currency_symbol="₺", scanner_service=scanner,
-        fundamentals_service=fundamentals, macro_service=macro, news_service=news,
+        fundamentals_service=fundamentals, macro_service=macro, news_service=news, notifier=notifier,
     )
 
 
@@ -681,24 +694,28 @@ def test_drawdown_circuit_breaker_blocks_new_entries(session_factory, scanner):
     assert len(svc.get_status().positions) == 0
 
 
-def test_max_drawdown_fraction_for_market_gives_bist_a_wider_threshold():
-    # A 3y backtest sweep (see the constant's comment in autotrader_service.py)
-    # found the flat 10% breaker paused new BIST entries on 64% of trading
-    # days, vs. 0% for Global -- BIST alone gets a wider, still-calibrated
+def test_max_drawdown_fraction_for_market_gives_bist_and_crypto_a_wider_threshold():
+    # Separate 3y backtest sweeps (see the constant's comment in
+    # autotrader_service.py) found the flat 10% breaker paused new entries
+    # on 64% of BIST's trading days and 70% of Crypto's, vs. 0% for Global --
+    # both higher-volatility markets get the same wider, still-calibrated
     # threshold instead of a guessed one-size-fits-all number.
-    assert max_drawdown_fraction_for_market("bist") == BIST_MAX_DRAWDOWN_FRACTION
-    assert BIST_MAX_DRAWDOWN_FRACTION > MAX_DRAWDOWN_FRACTION
+    assert max_drawdown_fraction_for_market("bist") == HIGH_VOLATILITY_MAX_DRAWDOWN_FRACTION
+    assert max_drawdown_fraction_for_market("crypto") == HIGH_VOLATILITY_MAX_DRAWDOWN_FRACTION
+    assert HIGH_VOLATILITY_MAX_DRAWDOWN_FRACTION > MAX_DRAWDOWN_FRACTION
     assert max_drawdown_fraction_for_market("global") == MAX_DRAWDOWN_FRACTION
-    assert max_drawdown_fraction_for_market("crypto") == MAX_DRAWDOWN_FRACTION
 
 
-def test_drawdown_circuit_breaker_does_not_block_bist_within_its_wider_threshold(session_factory, scanner):
-    svc = _service(session_factory, scanner, market="bist")
+@pytest.mark.parametrize("market", ["bist", "crypto"])
+def test_drawdown_circuit_breaker_does_not_block_high_volatility_markets_within_their_wider_threshold(
+    session_factory, scanner, market
+):
+    svc = _service(session_factory, scanner, market=market)
     svc.start_run(initial_cash=10_000.0, duration_days=7.0)
-    # Past the original 10% breaker, but still inside BIST's wider 20% one --
+    # Past the original 10% breaker, but still inside the wider 20% one --
     # this drawdown must NOT block a new entry for this market.
     with session_factory() as db:
-        run = db.query(SimulationRun).filter(SimulationRun.market == "bist").one()
+        run = db.query(SimulationRun).filter(SimulationRun.market == market).one()
         run.peak_equity = 10_000.0
         run.cash = 10_000.0 * (1 - MAX_DRAWDOWN_FRACTION - 0.01)
         db.commit()
@@ -709,13 +726,16 @@ def test_drawdown_circuit_breaker_does_not_block_bist_within_its_wider_threshold
     assert len(svc.get_status().positions) == 1
 
 
-def test_drawdown_circuit_breaker_still_blocks_bist_past_its_own_threshold(session_factory, scanner):
-    svc = _service(session_factory, scanner, market="bist")
+@pytest.mark.parametrize("market", ["bist", "crypto"])
+def test_drawdown_circuit_breaker_still_blocks_high_volatility_markets_past_their_own_threshold(
+    session_factory, scanner, market
+):
+    svc = _service(session_factory, scanner, market=market)
     svc.start_run(initial_cash=10_000.0, duration_days=7.0)
     with session_factory() as db:
-        run = db.query(SimulationRun).filter(SimulationRun.market == "bist").one()
+        run = db.query(SimulationRun).filter(SimulationRun.market == market).one()
         run.peak_equity = 10_000.0
-        run.cash = 10_000.0 * (1 - BIST_MAX_DRAWDOWN_FRACTION - 0.01)
+        run.cash = 10_000.0 * (1 - HIGH_VOLATILITY_MAX_DRAWDOWN_FRACTION - 0.01)
         db.commit()
     scanner.set_signal("AAPL", SignalType.STRONG_BUY_SETUP, price=100.0, stop_loss=95.0, score=90)
 
@@ -742,6 +762,78 @@ def test_drawdown_circuit_breaker_does_not_block_existing_exits(session_factory,
     status = svc.get_status()
     assert len(status.positions) == 0  # stop-loss exit still happened despite the breaker
     assert status.recent_trades[0].action == "SELL"
+
+
+def test_new_position_sends_a_notification(session_factory, scanner):
+    notifier = _FakeNotifier()
+    svc = _service(session_factory, scanner, notifier=notifier)
+    svc.start_run(initial_cash=10_000.0, duration_days=7.0)
+    scanner.set_signal("AAPL", SignalType.STRONG_BUY_SETUP, price=100.0, stop_loss=95.0, score=90)
+
+    svc._tick_sync()
+
+    assert len(notifier.calls) == 1
+    title, message = notifier.calls[0]
+    assert "AAPL" in message
+
+
+def test_notifier_defaults_to_a_silent_no_op(session_factory, scanner):
+    # No notifier passed -- must not raise, just do nothing (NullNotifier).
+    svc = _service(session_factory, scanner)
+    svc.start_run(initial_cash=10_000.0, duration_days=7.0)
+    scanner.set_signal("AAPL", SignalType.STRONG_BUY_SETUP, price=100.0, stop_loss=95.0, score=90)
+
+    svc._tick_sync()  # would raise if AutoTraderService assumed a real notifier
+
+    assert len(svc.get_status().positions) == 1
+
+
+def test_drawdown_breaker_notifies_once_not_on_every_tick(session_factory, scanner):
+    notifier = _FakeNotifier()
+    svc = _service(session_factory, scanner, notifier=notifier)
+    svc.start_run(initial_cash=10_000.0, duration_days=7.0)
+    with session_factory() as db:
+        run = db.query(SimulationRun).filter(SimulationRun.market == "test").one()
+        run.peak_equity = 10_000.0
+        run.cash = 10_000.0 * (1 - MAX_DRAWDOWN_FRACTION - 0.01)
+        db.commit()
+    scanner.set_signal("AAPL", SignalType.STRONG_BUY_SETUP, price=100.0, stop_loss=95.0, score=90)
+
+    svc._tick_sync()
+    svc._tick_sync()
+    svc._tick_sync()
+
+    assert len(notifier.calls) == 1  # not resent on every subsequent tick of the same pause
+
+
+def test_drawdown_breaker_notifies_again_after_recovering_and_pausing_a_second_time(session_factory, scanner):
+    notifier = _FakeNotifier()
+    svc = _service(session_factory, scanner, notifier=notifier)
+    svc.start_run(initial_cash=10_000.0, duration_days=7.0)
+
+    def _set_cash_drawdown(fraction: float) -> None:
+        with session_factory() as db:
+            run = db.query(SimulationRun).filter(SimulationRun.market == "test").one()
+            run.peak_equity = 10_000.0
+            run.cash = 10_000.0 * (1 - fraction)
+            db.commit()
+
+    # Score below AUTOTRADER_ENTRY_SCORE_MIN -- never qualifies for entry,
+    # so this test isolates the breaker notification from the separate
+    # new-position one (covered by test_new_position_sends_a_notification).
+    scanner.set_signal("AAPL", SignalType.NEUTRAL, price=100.0, stop_loss=95.0, score=30)
+
+    _set_cash_drawdown(MAX_DRAWDOWN_FRACTION + 0.01)
+    svc._tick_sync()
+    assert len(notifier.calls) == 1
+
+    _set_cash_drawdown(0.0)  # recovers back to peak
+    svc._tick_sync()
+    assert len(notifier.calls) == 1  # recovering itself isn't notification-worthy
+
+    _set_cash_drawdown(MAX_DRAWDOWN_FRACTION + 0.01)  # a fresh pause
+    svc._tick_sync()
+    assert len(notifier.calls) == 2
 
 
 def test_status_reports_peak_equity_and_drawdown(session_factory, scanner):
