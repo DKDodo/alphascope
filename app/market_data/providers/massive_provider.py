@@ -81,7 +81,14 @@ class MassiveProvider(BaseMarketDataProvider):
                 assert self._ws is not None
                 async for raw_message in self._ws:
                     backoff = 1.0
-                    yield json.loads(raw_message)
+                    try:
+                        payload = json.loads(raw_message)
+                    except (TypeError, ValueError) as exc:
+                        # One malformed message must not tear down and
+                        # reconnect the whole stream -- log and keep reading.
+                        logger.warning("massive: dropping malformed message: %s", exc)
+                        continue
+                    yield payload
             except Exception as exc:  # noqa: BLE001
                 logger.warning("massive stream error, reconnecting in %.1fs: %s", backoff, exc)
                 await asyncio.sleep(backoff)

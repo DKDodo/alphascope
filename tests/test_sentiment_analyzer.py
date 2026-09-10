@@ -29,3 +29,16 @@ def test_empty_input_returns_empty_without_loading_anything():
     analyzer = SentimentAnalyzer()
     assert analyzer.classify_sync([]) == []
     assert analyzer.method == "unknown"  # never attempted a load
+
+
+def test_batch_failure_falls_back_to_keyword_for_that_call_only():
+    # One bad string in a whole market's combined batch (all symbols'
+    # headlines go through a single FinBERT call) must not blank out every
+    # OTHER symbol's sentiment for the cycle -- it should fall back to the
+    # keyword classifier for this batch, same as when FinBERT never loaded.
+    analyzer = SentimentAnalyzer()
+    analyzer._pipeline = lambda texts, truncation=True: (_ for _ in ()).throw(RuntimeError("boom"))
+
+    results = analyzer.classify_sync(["Company profit surges on strong earnings beat"])
+
+    assert results[0][0] == SentimentLabel.POSITIVE

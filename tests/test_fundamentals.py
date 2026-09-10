@@ -1,6 +1,12 @@
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
+
+import pytest
+
+from app.fundamentals import fundamentals_service as fundamentals_service_module
 from app.fundamentals import long_term_scoring
+from app.fundamentals.fundamentals_service import FundamentalsService
 from app.fundamentals.models import FundamentalSnapshot, LongTermOutlookLabel
 
 
@@ -135,3 +141,22 @@ def test_evaluate_missing_snapshot_is_insufficient_data():
 def test_evaluate_snapshot_with_no_fields_is_insufficient_data():
     outlook = long_term_scoring.evaluate_long_term_outlook(_snapshot(), long_term_trend_up=None)
     assert outlook.label == LongTermOutlookLabel.INSUFFICIENT_DATA
+
+
+@pytest.mark.asyncio
+async def test_stale_fundamentals_snapshot_is_treated_as_unavailable(monkeypatch):
+    # A symbol that succeeded once and then failed every cycle since (a real
+    # pattern -- Yahoo's quoteSummary endpoint intermittently blocks some
+    # hosting IPs) used to keep serving that first snapshot forever, with no
+    # notion of it going stale.
+    async def _fake_fetch(symbol: str, ticker_suffix: str = "") -> FundamentalSnapshot:
+        return _snapshot(symbol=symbol)
+
+    monkeypatch.setattr(fundamentals_service_module, "fetch_fundamental_snapshot", _fake_fetch)
+    service = FundamentalsService(symbols=["AAPL"], scanner_engine=None)
+
+    await service._run_cycle()
+    assert service.get_sector("AAPL") == "Technology"  # freshly fetched -- served normally
+
+    service._fetched_at["AAPL"] = datetime.now(timezone.utc) - timedelta(days=30)
+    assert service.get_sector("AAPL") is None

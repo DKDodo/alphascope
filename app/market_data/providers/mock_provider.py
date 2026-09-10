@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import random
+import zlib
 from collections.abc import AsyncIterator
 from datetime import datetime, timezone
 from typing import Any
@@ -32,6 +33,14 @@ _STARTING_PRICES: dict[str, float] = {
     "AMZN": 185.0,
     "GOOGL": 175.0,
 }
+
+
+def _stable_seed(seed: int, symbol: str) -> int:
+    """crc32, not Python's built-in hash(): str hashing is randomized
+    per-process (PYTHONHASHSEED) unless explicitly fixed, which silently
+    broke this provider's "deterministic if seeded" claim -- the same
+    (seed, symbol) pair produced a different random walk on every restart."""
+    return zlib.crc32(f"{seed}:{symbol}".encode())
 
 
 class _SymbolState:
@@ -69,7 +78,7 @@ class MockProvider(BaseMarketDataProvider):
     async def subscribe(self, symbols: list[str]) -> None:
         for symbol in symbols:
             if symbol not in self._states:
-                base_seed = None if self._seed is None else hash((self._seed, symbol)) & 0xFFFFFFFF
+                base_seed = None if self._seed is None else _stable_seed(self._seed, symbol)
                 start_price = _STARTING_PRICES.get(symbol, 100.0)
                 self._states[symbol] = _SymbolState(start_price, random.Random(base_seed))
             self._subscribed.add(symbol)

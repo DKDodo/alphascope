@@ -76,7 +76,15 @@ class SentimentAnalyzer:
         if not self._ensure_loaded():
             return [classify_keyword_sync(t) for t in texts]
 
-        results = self._pipeline(texts, truncation=True)
+        try:
+            results = self._pipeline(texts, truncation=True)
+        except Exception:  # noqa: BLE001 - one bad string in a whole market's
+            # batch (e.g. an unusual unicode sequence in a single headline)
+            # must not blank out every OTHER symbol's sentiment for this
+            # cycle too -- fall back to the keyword classifier for this
+            # batch, same as when FinBERT never loaded at all.
+            logger.warning("FinBERT batch classification failed, falling back to keyword sentiment for this cycle")
+            return [classify_keyword_sync(t) for t in texts]
         return [
             (_LABEL_MAP.get(r["label"].lower(), SentimentLabel.NEUTRAL), float(r["score"]))
             for r in results
