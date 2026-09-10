@@ -102,6 +102,19 @@ def test_seed_bar_older_than_an_already_arrived_live_bar_is_dropped():
     assert indicators.bars_available == 1
 
 
+def test_volume_ratio_is_none_on_the_very_first_bar():
+    # With no prior bars, there's no baseline to compare against -- must be
+    # an honest "not enough history yet" None, not a fake 1.0x ("exactly
+    # average volume") produced by comparing the bar against a "history"
+    # that actually only contains itself.
+    engine = ScannerEngine()
+    engine.on_event(_bar("AAPL", 100.0, 5_000_000.0, datetime(2026, 9, 7, 12, 0, tzinfo=timezone.utc)))
+
+    indicators = engine.compute_indicators("AAPL")
+
+    assert indicators.volume_ratio is None
+
+
 def test_seed_bar_in_chronological_order_still_works():
     # Normal DB warm-start / backfill path (no race): historical bars
     # arriving in order, before any live bar, must be entirely unaffected.

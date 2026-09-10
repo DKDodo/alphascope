@@ -64,7 +64,12 @@ class RiskEngine:
         else:
             take_profit_1 = atr_based_tp1
 
-        risk_per_share = entry_price - stop_loss
+        # From the clamped stop_loss (below), not the pre-clamp local --
+        # otherwise a stop distance wide enough to clamp to 0 would still
+        # report the pre-clamp (negative) distance here, so risk_per_share
+        # and risk_reward_ratio wouldn't reconcile with the stop_loss this
+        # response actually shows.
+        risk_per_share = entry_price - max(stop_loss, 0.0)
         reward_per_share_tp1 = take_profit_1 - entry_price
         # TP2 keeps the same reward-multiple relative to TP1 that the pure
         # ATR-based fallback would have had (tp2_mult / tp1_mult), so a

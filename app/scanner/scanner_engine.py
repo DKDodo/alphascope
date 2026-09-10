@@ -20,7 +20,16 @@ from app.market_data.models import EventType, MarketEvent
 
 logger = get_logger(__name__)
 
-ROLLING_WINDOW = 250
+# EMA is mathematically an infinite-memory average, but this deque is
+# bounded, so ema()/ema_series() reseeds from whatever bar now sits at the
+# start of the window every time it evicts -- at window=250, EMA200 (whose
+# natural memory horizon is comparable to the window itself) never fully
+# converges to the true infinite-history value. A wider window makes the
+# residual bias negligible ((1 - 2/201)^1000 ~= 0.0045%) without the bigger
+# architecture change of switching to a stateful/incremental EMA; the other
+# indicators (RSI14/ATR14/MACD/Bollinger20) only ever read the tail of this
+# window, so widening it doesn't change their output.
+ROLLING_WINDOW = 1000
 
 
 @dataclass
@@ -155,7 +164,11 @@ class ScannerEngine:
             atr14=atr(highs, lows, closes, 14),
             bollinger=bollinger_bands(closes, 20, 2.0),
             vwap=vwap(session_highs, session_lows, session_closes, session_volumes),
-            volume_ratio=volume_ratio(volumes[-1], volumes[:-1] or volumes, lookback=20),
+            # volumes[:-1] excludes the current bar from its own baseline --
+            # with only one bar ever seen, that's an empty history, and
+            # volume_ratio() already returns None for that (not a fake 1.0x
+            # "average" comparing the current bar against only itself).
+            volume_ratio=volume_ratio(volumes[-1], volumes[:-1], lookback=20),
             momentum_roc=momentum_roc(closes, 10),
             bars_available=len(closes),
             last_bar_time=state.timestamps[-1] if state.timestamps else None,

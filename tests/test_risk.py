@@ -70,6 +70,18 @@ def test_risk_reward_resistance_too_close_uses_atr_floor():
     assert result.take_profit_1 == 101.0  # entry + atr * 0.5 floor
 
 
+def test_risk_per_share_reconciles_with_the_clamped_stop_loss():
+    # atr*stop_mult (10*1.5=15) exceeds entry_price (10) -- stop_loss would
+    # go negative and gets clamped to 0.0 in the response. risk_per_share
+    # must be computed from that same clamped value (10 - 0 = 10), not the
+    # pre-clamp distance (10 - (-5) = 15), or the two displayed numbers
+    # wouldn't agree with each other.
+    engine = RiskEngine()
+    result = engine.analyze(entry_price=10.0, atr=10.0)
+    assert result.stop_loss == 0.0
+    assert result.risk_per_share == pytest.approx(result.entry_price)
+
+
 def test_position_sizing_respects_risk_percent():
     size = calculate_position_size(
         account_balance=10_000.0, risk_percent=1.0, entry_price=50.0, stop_price=48.0

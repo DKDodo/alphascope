@@ -353,14 +353,14 @@ class AutoTraderService:
         if position.stop_loss is None:
             return
         if run.stop_loss_pct is not None and run.take_profit_pct is not None:
-            trailing_candidate = signal.price * (1 - run.stop_loss_pct / 100)
+            trailing_candidate = round(signal.price * (1 - run.stop_loss_pct / 100), 4)
         else:
             if signal.risk_analysis is None:
                 return
             atr = signal.risk_analysis.atr
             if atr <= 0:
                 return
-            trailing_candidate = signal.price - atr * TRAILING_STOP_ATR_MULTIPLIER
+            trailing_candidate = round(signal.price - atr * TRAILING_STOP_ATR_MULTIPLIER, 4)
         if trailing_candidate > position.stop_loss:
             position.stop_loss = trailing_candidate
 
@@ -497,9 +497,13 @@ class AutoTraderService:
             if run.stop_loss_pct is not None and run.take_profit_pct is not None:
                 # User-chosen fixed percentages (see start_run()) override
                 # RiskEngine's ATR-based sizing entirely for this run.
-                stop_loss = result.price * (1 - run.stop_loss_pct / 100)
-                take_profit = result.price * (1 + run.take_profit_pct / 100)
-                take_profit_2 = result.price * (1 + run.take_profit_pct * FIXED_PCT_TP2_RATIO / 100)
+                # Rounded like RiskEngine's own ATR-based stop/target
+                # (risk_engine.py) -- raw percentage arithmetic on a float
+                # price otherwise leaks binary-floating-point noise
+                # (123.45678999999998-style) into the API response.
+                stop_loss = round(result.price * (1 - run.stop_loss_pct / 100), 4)
+                take_profit = round(result.price * (1 + run.take_profit_pct / 100), 4)
+                take_profit_2 = round(result.price * (1 + run.take_profit_pct * FIXED_PCT_TP2_RATIO / 100), 4)
             else:
                 stop_loss = detail.risk_analysis.stop_loss if detail and detail.risk_analysis else None
                 take_profit = detail.risk_analysis.take_profit_1 if detail and detail.risk_analysis else None
