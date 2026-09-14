@@ -77,6 +77,7 @@ def _parse_download(data: Any, symbols: list[str], tickers: list[str]) -> dict[s
         ema200 = ema(closes, 200)
         trend_up = ema50 > ema200 if ema50 is not None and ema200 is not None else None
         results[symbol] = DailyTrend(
-            symbol=symbol, ema50=ema50, ema200=ema200, trend_up=trend_up, as_of=now
+            symbol=symbol, ema50=ema50, ema200=ema200, trend_up=trend_up, as_of=now,
+            recent_closes=closes,
         )
     return results

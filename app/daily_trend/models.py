@@ -19,3 +19,9 @@ class DailyTrend(BaseModel):
     # (downtrend), None = not enough daily history yet to tell.
     trend_up: bool | None = None
     as_of: datetime
+    # The same daily closes ema50/ema200 were computed from (oldest first) --
+    # this fetch already pulls ~2y of daily history per symbol; retaining it
+    # here lets AutoTraderService's correlation gate (see
+    # MAX_CORRELATION_WITH_OPEN_POSITION in autotrader_service.py) reuse it
+    # instead of a second fetch.
+    recent_closes: list[float] = []

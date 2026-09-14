@@ -379,7 +379,19 @@ See `.env.example`. Key settings:
   down, to lock in gains instead of giving back a whole reversal — visible
   in the dashboard's simulation panel as "Zarar-Kes (İz Süren)". At most
   `MAX_POSITIONS_PER_SECTOR` open positions may share the same
-  fundamentals sector, forcing real diversification. A second entry path
+  fundamentals sector, forcing real diversification — but checked against
+  real Global-universe data, that cap still lets exactly 2 highly-correlated
+  names through (the most-correlated real pairs, e.g. HD-LOW at 0.88, are
+  almost all same-sector). A separate correlation gate closes that gap
+  directly: a new candidate is skipped if its `CORRELATION_WINDOW_DAYS`
+  daily-return correlation with any currently-open position exceeds
+  `MAX_CORRELATION_WITH_OPEN_POSITION` (0.7), independent of sector. Reuses
+  the daily closes `app/daily_trend/` already fetches for EMA50/EMA200 (no
+  extra request), fails open below `MIN_CORRELATION_SAMPLES` of shared
+  history or without a `daily_trend_service` at all, and the backtest
+  replays the identical check (`return_correlation()`, imported from
+  `autotrader_service.py` so the two can't quietly diverge) strictly from
+  bars up to the day being replayed. A second entry path
   opens on a STRONG `DipOpportunity` even without a trend-following buy
   setup (trade-logged separately as "Dip Fırsatı"). Both entry paths require
   the daily-bar trend (`app/daily_trend/`, EMA50 vs EMA200) not to be

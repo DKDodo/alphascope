@@ -5,13 +5,19 @@ from datetime import date, datetime, timedelta, timezone
 
 import pytest
 
-from app.autotrader.autotrader_service import AVOID_EXIT_STREAK_REQUIRED
+from app.autotrader.autotrader_service import (
+    AVOID_EXIT_STREAK_REQUIRED,
+    CORRELATION_WINDOW_DAYS,
+    MIN_CORRELATION_SAMPLES,
+)
 from app.backtest import backtest_engine
 from app.backtest.backtest_engine import (
     _TRADING_DAYS_PER_YEAR,
     _OpenPosition,
     _benchmark_return_pct,
+    _closes_through,
     _exit_reason,
+    _is_correlated_with_an_open_position,
     _position_size,
     _process_entries,
     _process_exits,
@@ -255,6 +261,120 @@ def test_process_entries_skips_a_dust_sized_allocation():
 
     assert "AAPL" not in open_meta
     assert trades == []
+
+
+def _synthetic_closes(n: int = MIN_CORRELATION_SAMPLES + 10) -> list[float]:
+    """Deterministic alternating-step series with real, non-zero return
+    variance -- a flat series would give return_correlation() a zero-
+    variance StatisticsError (caught, returns None), which would make
+    correlation tests pass for the wrong reason."""
+    closes = [100.0]
+    for i in range(n):
+        step = 0.01 if i % 2 == 0 else -0.007
+        closes.append(closes[-1] * (1 + step))
+    return closes
+
+
+def _perfectly_correlated_closes(base: list[float]) -> list[float]:
+    return list(base)
+
+
+def _perfectly_anticorrelated_closes(base: list[float]) -> list[float]:
+    closes = [100.0]
+    for prev, curr in zip(base, base[1:]):
+        step = (curr - prev) / prev
+        closes.append(closes[-1] * (1 - step))
+    return closes
+
+
+def test_closes_through_excludes_bars_dated_after_the_replay_day():
+    dates = [date(2022, 1, d) for d in range(1, 11)]
+    closes = [100.0 + i for i in range(10)]
+
+    result = _closes_through(dates, closes, as_of=date(2022, 1, 5), window=10)
+
+    assert result == closes[:5]  # only through Jan 5 (index 4) -- nothing from Jan 6 onward leaks in
+
+
+def test_closes_through_respects_the_window_size():
+    dates = [date(2022, 1, d) for d in range(1, 11)]
+    closes = [100.0 + i for i in range(10)]
+
+    result = _closes_through(dates, closes, as_of=date(2022, 1, 10), window=3)
+
+    assert result == closes[-3:]
+
+
+def test_process_entries_blocks_a_candidate_correlated_with_an_open_position():
+    portfolio = PaperPortfolio(starting_cash=100_000.0)
+    portfolio.buy("AAPL", 10.0, 100.0)
+    trades: list[BacktestTrade] = []
+    open_meta = {"AAPL": _OpenPosition(stop_loss=95.0, take_profit=200.0, take_profit_2=None)}
+    signals_today = {"MSFT": _signal(100.0, signal=SignalType.STRONG_BUY_SETUP, symbol="MSFT")}
+
+    base = _synthetic_closes()
+    dates = [date(2022, 1, 1) + timedelta(days=i) for i in range(len(base))]
+    sorted_dates_by_symbol = {"AAPL": dates, "MSFT": dates}
+    sorted_closes_by_symbol = {"AAPL": base, "MSFT": _perfectly_correlated_closes(base)}
+
+    _process_entries(
+        portfolio, trades, open_meta, signals_today, risk_multiplier=1.0, current_date=dates[-1],
+        sorted_dates_by_symbol=sorted_dates_by_symbol, sorted_closes_by_symbol=sorted_closes_by_symbol,
+    )
+
+    assert "MSFT" not in open_meta
+    assert trades == []
+
+
+def test_process_entries_allows_an_anticorrelated_candidate():
+    portfolio = PaperPortfolio(starting_cash=100_000.0)
+    portfolio.buy("AAPL", 10.0, 100.0)
+    trades: list[BacktestTrade] = []
+    open_meta = {"AAPL": _OpenPosition(stop_loss=95.0, take_profit=200.0, take_profit_2=None)}
+    signals_today = {"MSFT": _signal(100.0, signal=SignalType.STRONG_BUY_SETUP, symbol="MSFT")}
+
+    base = _synthetic_closes()
+    dates = [date(2022, 1, 1) + timedelta(days=i) for i in range(len(base))]
+    sorted_dates_by_symbol = {"AAPL": dates, "MSFT": dates}
+    sorted_closes_by_symbol = {"AAPL": base, "MSFT": _perfectly_anticorrelated_closes(base)}
+
+    _process_entries(
+        portfolio, trades, open_meta, signals_today, risk_multiplier=1.0, current_date=dates[-1],
+        sorted_dates_by_symbol=sorted_dates_by_symbol, sorted_closes_by_symbol=sorted_closes_by_symbol,
+    )
+
+    assert "MSFT" in open_meta
+
+
+def test_correlation_check_ignores_bars_after_the_replay_day():
+    # AAPL and MSFT are perfectly correlated for their first `n` days, then
+    # MSFT's remaining days (dated AFTER current_date) are anti-correlated
+    # instead -- current_date sits before that flip, so the future
+    # anti-correlated bars must not be visible yet, and MSFT must still be
+    # blocked as if it were correlated through today.
+    base = _synthetic_closes(n=MIN_CORRELATION_SAMPLES + 40)
+    dates = [date(2022, 1, 1) + timedelta(days=i) for i in range(len(base))]
+    split = MIN_CORRELATION_SAMPLES + 15
+    current_date = dates[split]
+
+    msft_closes = _perfectly_correlated_closes(base)[: split + 1] + _perfectly_anticorrelated_closes(
+        base[split:]
+    )[1:]
+
+    portfolio = PaperPortfolio(starting_cash=100_000.0)
+    portfolio.buy("AAPL", 10.0, 100.0)
+    trades: list[BacktestTrade] = []
+    open_meta = {"AAPL": _OpenPosition(stop_loss=95.0, take_profit=200.0, take_profit_2=None)}
+    signals_today = {"MSFT": _signal(100.0, signal=SignalType.STRONG_BUY_SETUP, symbol="MSFT")}
+    sorted_dates_by_symbol = {"AAPL": dates, "MSFT": dates}
+    sorted_closes_by_symbol = {"AAPL": base, "MSFT": msft_closes}
+
+    _process_entries(
+        portfolio, trades, open_meta, signals_today, risk_multiplier=1.0, current_date=current_date,
+        sorted_dates_by_symbol=sorted_dates_by_symbol, sorted_closes_by_symbol=sorted_closes_by_symbol,
+    )
+
+    assert "MSFT" not in open_meta  # correlated as of current_date -- the later anti-correlated flip hasn't happened yet
 
 
 def test_process_exits_sells_on_stop_loss():

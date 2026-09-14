@@ -60,3 +60,7 @@ class DailyTrendService:
     def get_trend(self, symbol: str) -> bool | None:
         snapshot = self._latest.get(symbol.upper())
         return snapshot.trend_up if snapshot else None
+
+    def get_recent_closes(self, symbol: str) -> list[float] | None:
+        snapshot = self._latest.get(symbol.upper())
+        return snapshot.recent_closes if snapshot else None

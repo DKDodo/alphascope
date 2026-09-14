@@ -12,13 +12,17 @@ from sqlalchemy.pool import StaticPool
 from app.autotrader.autotrader_service import (
     AutoTraderService,
     AVOID_EXIT_STREAK_REQUIRED,
+    CORRELATION_WINDOW_DAYS,
     FIXED_PCT_TP2_RATIO,
     HIGH_VOLATILITY_MAX_DRAWDOWN_FRACTION,
     MAX_CONCURRENT_POSITIONS,
+    MAX_CORRELATION_WITH_OPEN_POSITION,
     MAX_DRAWDOWN_FRACTION,
+    MIN_CORRELATION_SAMPLES,
     MIN_RELEVANT_HEADLINES_FOR_NEWS_GATE,
     TRANSACTION_COST_RATE,
     max_drawdown_fraction_for_market,
+    return_correlation,
 )
 from app.autotrader.db_models import SimulationPosition, SimulationRun
 from app.autotrader.models import StartSimulationRequest
@@ -111,6 +115,47 @@ class _FakeMacroService:
         return [MacroIndicator(symbol="^VIX", label="VIX", description="", price=self._vix, change_pct=None, as_of=None)]
 
 
+class _FakeDailyTrendService:
+    """Minimal stand-in for DailyTrendService: the correlation gate only
+    calls get_recent_closes()."""
+
+    def __init__(self) -> None:
+        self._closes: dict[str, list[float]] = {}
+
+    def set_closes(self, symbol: str, closes: list[float]) -> None:
+        self._closes[symbol.upper()] = closes
+
+    def get_recent_closes(self, symbol: str) -> list[float] | None:
+        return self._closes.get(symbol.upper())
+
+
+def _synthetic_closes(n: int = MIN_CORRELATION_SAMPLES + 10) -> list[float]:
+    """A deterministic (not random) alternating-step series with genuine,
+    non-zero variance in its returns -- a flat/constant series would give
+    return_correlation() a zero-variance StatisticsError (caught, returns
+    None), which would make every test below trivially pass for the wrong
+    reason."""
+    closes = [100.0]
+    for i in range(n):
+        step = 0.01 if i % 2 == 0 else -0.007
+        closes.append(closes[-1] * (1 + step))
+    return closes
+
+
+def _perfectly_correlated_closes(base: list[float]) -> list[float]:
+    return list(base)  # identical series -> correlation with itself is exactly 1.0
+
+
+def _perfectly_anticorrelated_closes(base: list[float]) -> list[float]:
+    # Each step is the exact negation of `base`'s corresponding return ->
+    # Pearson correlation is exactly -1.0, not just "low".
+    closes = [100.0]
+    for prev, curr in zip(base, base[1:]):
+        step = (curr - prev) / prev
+        closes.append(closes[-1] * (1 - step))
+    return closes
+
+
 class _FakeNewsService:
     """Minimal stand-in for NewsService: AutoTraderService only calls
     get_news(). set_news() computes overall the same way news_service.py's
@@ -162,11 +207,13 @@ def scanner():
 
 
 def _service(
-    session_factory, scanner, fundamentals=None, macro=None, news=None, market="test", notifier=None
+    session_factory, scanner, fundamentals=None, macro=None, news=None, market="test", notifier=None,
+    daily_trend=None,
 ) -> AutoTraderService:
     return AutoTraderService(
         session_factory=session_factory, market=market, currency_symbol="₺", scanner_service=scanner,
         fundamentals_service=fundamentals, macro_service=macro, news_service=news, notifier=notifier,
+        daily_trend_service=daily_trend,
     )
 
 
@@ -438,6 +485,86 @@ def test_sector_cap_not_applied_without_a_fundamentals_service(session_factory, 
     svc._tick_sync()
 
     assert len(svc.get_status().positions) == 3
+
+
+def test_return_correlation_of_a_series_with_itself_is_one():
+    closes = _synthetic_closes()
+    assert return_correlation(closes, closes) == pytest.approx(1.0)
+
+
+def test_return_correlation_of_perfectly_anticorrelated_series_is_negative_one():
+    base = _synthetic_closes()
+    inverse = _perfectly_anticorrelated_closes(base)
+    assert return_correlation(base, inverse) == pytest.approx(-1.0)
+
+
+def test_return_correlation_is_none_with_too_few_overlapping_samples():
+    short = _synthetic_closes(n=MIN_CORRELATION_SAMPLES - 5)
+    assert return_correlation(short, short) is None
+
+
+def test_return_correlation_only_uses_the_trailing_window():
+    # Both series share an IDENTICAL (correlation +1) "old" history, then
+    # diverge to perfectly anti-correlated (-1) for the most recent window.
+    # If the function wrongly used the full history instead of just the
+    # trailing CORRELATION_WINDOW_DAYS, the +1-correlated old portion would
+    # pull the result well above -1.
+    old_shared = _synthetic_closes(n=200)
+    recent_base = _synthetic_closes(n=CORRELATION_WINDOW_DAYS + 5)
+    recent_anti = _perfectly_anticorrelated_closes(recent_base)
+
+    series_a = old_shared + recent_base[1:]
+    series_b = old_shared + recent_anti[1:]
+
+    assert return_correlation(series_a, series_b) == pytest.approx(-1.0, abs=0.05)
+
+
+def test_correlation_gate_blocks_a_new_position_highly_correlated_with_an_open_one(session_factory, scanner):
+    daily_trend = _FakeDailyTrendService()
+    base = _synthetic_closes()
+    daily_trend.set_closes("AAPL", base)
+    daily_trend.set_closes("MSFT", _perfectly_correlated_closes(base))
+
+    svc = _service(session_factory, scanner, daily_trend=daily_trend)
+    svc.start_run(initial_cash=100_000.0, duration_days=7.0)
+    scanner.set_signal("AAPL", SignalType.STRONG_BUY_SETUP, price=100.0, stop_loss=95.0, score=90)
+    svc._tick_sync()  # opens AAPL -- no other position open yet, so the gate is a no-op here
+    assert {p.symbol for p in svc.get_status().positions} == {"AAPL"}
+
+    scanner.set_signal("MSFT", SignalType.STRONG_BUY_SETUP, price=200.0, stop_loss=190.0, score=90)
+    svc._tick_sync()
+
+    # MSFT blocked -- perfectly correlated (1.0 > MAX_CORRELATION_WITH_OPEN_POSITION) with the open AAPL position
+    assert {p.symbol for p in svc.get_status().positions} == {"AAPL"}
+
+
+def test_correlation_gate_allows_an_anticorrelated_new_position(session_factory, scanner):
+    daily_trend = _FakeDailyTrendService()
+    base = _synthetic_closes()
+    daily_trend.set_closes("AAPL", base)
+    daily_trend.set_closes("MSFT", _perfectly_anticorrelated_closes(base))
+
+    svc = _service(session_factory, scanner, daily_trend=daily_trend)
+    svc.start_run(initial_cash=100_000.0, duration_days=7.0)
+    scanner.set_signal("AAPL", SignalType.STRONG_BUY_SETUP, price=100.0, stop_loss=95.0, score=90)
+    svc._tick_sync()
+
+    scanner.set_signal("MSFT", SignalType.STRONG_BUY_SETUP, price=200.0, stop_loss=190.0, score=90)
+    svc._tick_sync()
+
+    assert {p.symbol for p in svc.get_status().positions} == {"AAPL", "MSFT"}
+
+
+def test_correlation_gate_is_a_no_op_without_a_daily_trend_service(session_factory, scanner):
+    svc = _service(session_factory, scanner)  # daily_trend=None
+    svc.start_run(initial_cash=100_000.0, duration_days=7.0)
+    scanner.set_signal("AAPL", SignalType.STRONG_BUY_SETUP, price=100.0, stop_loss=95.0, score=90)
+    svc._tick_sync()
+    scanner.set_signal("MSFT", SignalType.STRONG_BUY_SETUP, price=200.0, stop_loss=190.0, score=90)
+    svc._tick_sync()
+
+    # No daily_trend_service -> gate fails open, same spirit as every other optional gate here.
+    assert {p.symbol for p in svc.get_status().positions} == {"AAPL", "MSFT"}
 
 
 def test_dip_opportunity_triggers_entry_without_a_trend_buy_setup(session_factory, scanner):

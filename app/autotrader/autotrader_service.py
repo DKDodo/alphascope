@@ -70,6 +70,7 @@ Design choices, made explicit because they directly shape the results:
 from __future__ import annotations
 
 import asyncio
+import statistics
 import threading
 from datetime import datetime, timedelta, timezone
 
@@ -85,6 +86,7 @@ from app.autotrader.models import (
 )
 from app.core.exceptions import RiskCalculationError
 from app.core.logging import get_logger
+from app.daily_trend.daily_trend_service import DailyTrendService
 from app.fundamentals.fundamentals_service import FundamentalsService
 from app.fundamentals.models import LongTermOutlookLabel
 from app.macro.macro_service import MacroService
@@ -108,6 +110,22 @@ TRAILING_STOP_ATR_MULTIPLIER = DEFAULT_STOP_ATR_MULTIPLIER  # same distance the 
 MAX_CONCURRENT_POSITIONS = 5
 MIN_TRADE_VALUE = 1.0  # skip a buy that would be smaller than this (dust)
 MAX_POSITIONS_PER_SECTOR = 2  # forces diversification even within the concurrent-position cap
+# MAX_POSITIONS_PER_SECTOR still lets exactly 2 same-sector positions
+# through -- checked against real Global-universe data (1y daily returns):
+# the most correlated pairs are almost all same-sector (HD-LOW 0.88, V-MA
+# 0.86, GS-MS 0.85, XOM-CVX 0.84, BAC-WFC 0.80), so the sector cap catches
+# 3+ of a kind but not exactly 2, which is still "one real bet twice." 0.7
+# sits below the tightest of those real pairs while remaining solidly in
+# finance's conventional "strong correlation" range, so it wouldn't have
+# blocked *unrelated* names by accident on that same data. Checked pairwise
+# against every currently-open position, independent of sector, using
+# CORRELATION_WINDOW_DAYS of daily-return history (app/daily_trend/ already
+# fetches ~2y of daily closes per symbol for EMA200 -- reused here, no new
+# fetch). Fails open (like every other optional gate here) below
+# MIN_CORRELATION_SAMPLES of overlapping history.
+MAX_CORRELATION_WITH_OPEN_POSITION = 0.7
+CORRELATION_WINDOW_DAYS = 90
+MIN_CORRELATION_SAMPLES = 30
 DIP_ENTRY_MIN_CONFIDENCE = DipConfidence.STRONG  # only the highest-confidence dips get a secondary entry
 VIX_ELEVATED_THRESHOLD = 20.0  # -> halve new-position risk
 VIX_HIGH_THRESHOLD = 30.0  # -> quarter new-position risk
@@ -180,6 +198,33 @@ def _as_utc(dt: datetime) -> datetime:
     return dt if dt.tzinfo is not None else dt.replace(tzinfo=timezone.utc)
 
 
+def return_correlation(
+    closes_a: list[float], closes_b: list[float], window: int = CORRELATION_WINDOW_DAYS
+) -> float | None:
+    """Pearson correlation of daily RETURNS over the last `window` trading
+    days both series have in common -- not raw price levels, which are
+    almost always highly "correlated" for any two stocks that both trended
+    up over the period regardless of whether they actually move together
+    day to day (the thing diversification actually cares about). Shared by
+    the live AutoTrader gate and the backtest's ported version of it, so
+    the two can never quietly diverge. None (fail open) with too little
+    overlapping history, or on any degenerate input (e.g. a flat series
+    with zero variance) rather than raising out of a trading tick."""
+    a = closes_a[-window:]
+    b = closes_b[-window:]
+    n = min(len(a), len(b))
+    a, b = a[-n:], b[-n:]
+    returns_a = [(a[i] - a[i - 1]) / a[i - 1] for i in range(1, len(a)) if a[i - 1]]
+    returns_b = [(b[i] - b[i - 1]) / b[i - 1] for i in range(1, len(b)) if b[i - 1]]
+    m = min(len(returns_a), len(returns_b))
+    if m < MIN_CORRELATION_SAMPLES:
+        return None
+    try:
+        return statistics.correlation(returns_a[-m:], returns_b[-m:])
+    except statistics.StatisticsError:  # e.g. zero variance in one series
+        return None
+
+
 class AutoTraderService:
     def __init__(
         self,
@@ -192,6 +237,7 @@ class AutoTraderService:
         macro_service: MacroService | None = None,
         news_service: NewsService | None = None,
         notifier: Notifier | None = None,
+        daily_trend_service: DailyTrendService | None = None,
     ) -> None:
         self._session_factory = session_factory
         self._market = market
@@ -203,6 +249,7 @@ class AutoTraderService:
         self._macro_service = macro_service
         self._news_service = news_service
         self._notifier = notifier or NullNotifier()
+        self._daily_trend_service = daily_trend_service
         # Tracks which run.id we've already sent a "paused" toast for, so a
         # tick every self._tick_interval seconds for the rest of a multi-day
         # pause doesn't resend it every time -- reset to None once equity
@@ -515,6 +562,13 @@ class AutoTraderService:
             if sector and open_sectors.get(sector, 0) >= MAX_POSITIONS_PER_SECTOR:
                 continue
 
+            # open_symbols, not open_positions -- it's updated below as each
+            # candidate is bought, so two correlated candidates both
+            # qualifying in the SAME tick can't both slip through just
+            # because neither was open yet when the tick started.
+            if self._is_correlated_with_an_open_position(result.symbol, open_symbols):
+                continue
+
             detail = self._scanner_service.get_signal(result.symbol)
             if run.stop_loss_pct is not None and run.take_profit_pct is not None:
                 # User-chosen fixed percentages (see start_run()) override
@@ -583,6 +637,25 @@ class AutoTraderService:
                 f"AlphaScope — {self._market.upper()} yeni pozisyon",
                 f"{result.symbol} x{quantity:.4f} @ {result.price:.2f} — {reason}",
             )
+
+    def _is_correlated_with_an_open_position(self, symbol: str, open_symbols: set[str]) -> bool:
+        if self._daily_trend_service is None:
+            return False  # fail open, same as every other optional gate here
+        candidate_closes = self._daily_trend_service.get_recent_closes(symbol)
+        if not candidate_closes:
+            return False
+        for open_symbol in open_symbols:
+            open_closes = self._daily_trend_service.get_recent_closes(open_symbol)
+            if not open_closes:
+                continue
+            correlation = return_correlation(candidate_closes, open_closes)
+            if correlation is not None and correlation > MAX_CORRELATION_WITH_OPEN_POSITION:
+                logger.info(
+                    "[%s] skipping %s entry -- %.2f correlated with open position %s",
+                    self._market, symbol, correlation, open_symbol,
+                )
+                return True
+        return False
 
     def _risk_multiplier_from_vix(self) -> float:
         """Derates new-position risk when the VIX is elevated -- purely a

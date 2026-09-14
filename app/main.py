@@ -302,6 +302,7 @@ def _build_context(
         macro_service=macro_service,
         news_service=news_service,
         notifier=notifier,
+        daily_trend_service=daily_trend_service,
     )
 
     signal_tracking_service = SignalTrackingService(

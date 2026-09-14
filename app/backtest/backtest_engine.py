@@ -18,10 +18,14 @@ deliberately NOT replayed here: sector-diversification, Uzun Vadeli
 Görünüm, and news-sentiment gates need point-in-time historical
 fundamentals/news archives that aren't available for free, and the
 daily-trend confirmation gate is redundant once the base timeframe
-already IS daily bars.
+already IS daily bars. The correlation gate (MAX_CORRELATION_WITH_OPEN_POSITION)
+IS replayed, unlike those -- it only needs price history, which this
+replay already has in full, computed strictly from bars up to (never
+past) the day being replayed so it can't see the future.
 """
 from __future__ import annotations
 
+import bisect
 from dataclasses import dataclass
 from datetime import date as date_type
 from datetime import datetime, timezone
@@ -30,8 +34,10 @@ from statistics import mean, pstdev
 from app.autotrader.autotrader_service import (
     AUTOTRADER_ENTRY_SCORE_MIN,
     AVOID_EXIT_STREAK_REQUIRED,
+    CORRELATION_WINDOW_DAYS,
     DIP_ENTRY_MIN_CONFIDENCE,
     MAX_CONCURRENT_POSITIONS,
+    MAX_CORRELATION_WITH_OPEN_POSITION,
     MAX_POSITION_ALLOCATION_FRACTION,
     MIN_TRADE_VALUE,
     PARTIAL_EXIT_FRACTION,
@@ -41,6 +47,7 @@ from app.autotrader.autotrader_service import (
     VIX_ELEVATED_THRESHOLD,
     VIX_HIGH_THRESHOLD,
     max_drawdown_fraction_for_market,
+    return_correlation,
 )
 from app.backtest.historical_data import fetch_historical_series, fetch_single_series
 from app.backtest.models import BacktestResult, BacktestTrade, EquityPoint
@@ -95,6 +102,16 @@ def run_backtest(
     bars_by_date = {symbol: {bar.timestamp.date(): bar for bar in bars} for symbol, bars in series.items()}
     all_dates = sorted({d for by_date in bars_by_date.values() for d in by_date})
 
+    # Presorted once for the correlation gate's per-candidate, per-day
+    # lookups (bisect below) -- avoids re-sorting a symbol's whole history
+    # on every one of those lookups across the replay.
+    sorted_dates_by_symbol: dict[str, list[date_type]] = {}
+    sorted_closes_by_symbol: dict[str, list[float]] = {}
+    for symbol, by_date in bars_by_date.items():
+        ordered = sorted(by_date.items())
+        sorted_dates_by_symbol[symbol] = [d for d, _ in ordered]
+        sorted_closes_by_symbol[symbol] = [bar.close for _, bar in ordered]
+
     scanner_engines = {symbol: ScannerEngine() for symbol in series}
     signal_engine = SignalEngine(risk_engine=RiskEngine())
     portfolio = PaperPortfolio(starting_cash=initial_cash)
@@ -137,7 +154,10 @@ def run_backtest(
 
         if drawdown < max_drawdown_fraction and len(open_meta) < MAX_CONCURRENT_POSITIONS:
             risk_multiplier = _risk_multiplier_from_vix(vix_by_date.get(current_date))
-            _process_entries(portfolio, trades, open_meta, signals_today, risk_multiplier, current_date)
+            _process_entries(
+                portfolio, trades, open_meta, signals_today, risk_multiplier, current_date,
+                sorted_dates_by_symbol, sorted_closes_by_symbol,
+            )
 
         equity_curve.append(EquityPoint(date=_to_datetime(current_date), equity=portfolio.snapshot().equity))
 
@@ -204,7 +224,15 @@ def _process_entries(
     signals_today: dict[str, SignalResult],
     risk_multiplier: float,
     current_date: date_type,
+    sorted_dates_by_symbol: dict[str, list[date_type]] | None = None,
+    sorted_closes_by_symbol: dict[str, list[float]] | None = None,
 ) -> None:
+    # Both default to {} (correlation gate is a no-op, matching its live
+    # fail-open behavior with no daily_trend_service) rather than requiring
+    # every caller -- including existing unit tests of just this function
+    # in isolation -- to know about a gate they aren't testing.
+    sorted_dates_by_symbol = sorted_dates_by_symbol or {}
+    sorted_closes_by_symbol = sorted_closes_by_symbol or {}
     open_symbols = set(open_meta.keys())
     all_results = list(signals_today.values())
 
@@ -226,6 +254,16 @@ def _process_entries(
     for result in trend_candidates + dip_candidates:
         if len(open_meta) >= MAX_CONCURRENT_POSITIONS:
             break
+
+        # open_meta, not the open_symbols snapshot from the top of this
+        # function -- it's updated below as each candidate is bought, so two
+        # correlated candidates both qualifying the same day can't both
+        # slip through just because neither was open when the day started.
+        if _is_correlated_with_an_open_position(
+            result.symbol, open_meta.keys(), current_date, sorted_dates_by_symbol, sorted_closes_by_symbol,
+        ):
+            continue
+
         cash = portfolio.snapshot().cash
         stop_loss = result.risk_analysis.stop_loss if result.risk_analysis else None
         take_profit = result.risk_analysis.take_profit_1 if result.risk_analysis else None
@@ -306,6 +344,41 @@ def _exit_reason(meta: _OpenPosition, price: float, signal: SignalType) -> str |
     if meta.avoid_streak >= AVOID_EXIT_STREAK_REQUIRED:
         return f"Sinyal {AVOID_EXIT_STREAK_REQUIRED} ardışık kontrolde KAÇININ'da kaldı"
     return None
+
+
+def _closes_through(
+    sorted_dates: list[date_type], sorted_closes: list[float], as_of: date_type, window: int
+) -> list[float]:
+    """Closes up to and including `as_of`, last `window` of them -- built
+    from a presorted (date, close) series specifically so this can never
+    see a bar dated after the day being replayed (lookahead bias)."""
+    idx = bisect.bisect_right(sorted_dates, as_of)
+    return sorted_closes[max(0, idx - window):idx]
+
+
+def _is_correlated_with_an_open_position(
+    symbol: str,
+    open_symbols,
+    current_date: date_type,
+    sorted_dates_by_symbol: dict[str, list[date_type]],
+    sorted_closes_by_symbol: dict[str, list[float]],
+) -> bool:
+    if symbol not in sorted_dates_by_symbol:
+        return False
+    candidate_closes = _closes_through(
+        sorted_dates_by_symbol[symbol], sorted_closes_by_symbol[symbol], current_date, CORRELATION_WINDOW_DAYS
+    )
+    for open_symbol in open_symbols:
+        if open_symbol not in sorted_dates_by_symbol:
+            continue
+        open_closes = _closes_through(
+            sorted_dates_by_symbol[open_symbol], sorted_closes_by_symbol[open_symbol],
+            current_date, CORRELATION_WINDOW_DAYS,
+        )
+        correlation = return_correlation(candidate_closes, open_closes)
+        if correlation is not None and correlation > MAX_CORRELATION_WITH_OPEN_POSITION:
+            return True
+    return False
 
 
 def _risk_multiplier_from_vix(vix: float | None) -> float:
