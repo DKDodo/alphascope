@@ -92,7 +92,14 @@ def fetch_volatility_regime(benchmark_symbol: str) -> VolatilityRegime | None:
 
     now = datetime.now(timezone.utc)
     try:
-        data = yf.download(benchmark_symbol, period=LOOKBACK_PERIOD, interval="1d", progress=False)
+        # group_by="ticker": without it, a MultiIndex download's levels come
+        # back (field, ticker) -- e.g. ("Close", "XU100.IS") -- instead of
+        # the (ticker, field) shape _parse_download() (and every other
+        # yfinance call site in this codebase) expects. Verified live: a
+        # bare yf.download(symbol, ...) with no group_by silently returned
+        # that other orientation, so data[benchmark_symbol] raised KeyError
+        # on every single poll (caught below, but every cycle came back empty).
+        data = yf.download(benchmark_symbol, period=LOOKBACK_PERIOD, interval="1d", group_by="ticker", progress=False)
     except Exception:  # noqa: BLE001 - a bad Yahoo response must not crash the poll cycle
         logger.exception("volatility regime download failed for %s", benchmark_symbol)
         return None
