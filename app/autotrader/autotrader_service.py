@@ -101,6 +101,7 @@ from app.risk.risk_engine import (
 )
 from app.services.scanner_service import ScannerService
 from app.signals.models import DipConfidence, SignalResult, SignalType
+from app.volatility_regime.volatility_regime_service import VolatilityRegimeService
 
 logger = get_logger(__name__)
 
@@ -238,6 +239,7 @@ class AutoTraderService:
         news_service: NewsService | None = None,
         notifier: Notifier | None = None,
         daily_trend_service: DailyTrendService | None = None,
+        volatility_regime_service: VolatilityRegimeService | None = None,
     ) -> None:
         self._session_factory = session_factory
         self._market = market
@@ -250,6 +252,7 @@ class AutoTraderService:
         self._news_service = news_service
         self._notifier = notifier or NullNotifier()
         self._daily_trend_service = daily_trend_service
+        self._volatility_regime_service = volatility_regime_service
         # Tracks which run.id we've already sent a "paused" toast for, so a
         # tick every self._tick_interval seconds for the rest of a multi-day
         # pause doesn't resend it every time -- reset to None once equity
@@ -518,8 +521,8 @@ class AutoTraderService:
                 if sector:
                     open_sectors[sector] = open_sectors.get(sector, 0) + 1
 
-        risk_multiplier = self._risk_multiplier_from_vix()
-        logger.info("[%s] autotrader risk_multiplier=%.2f (vix-derated)", self._market, risk_multiplier)
+        risk_multiplier = self._risk_multiplier()
+        logger.info("[%s] autotrader risk_multiplier=%.2f", self._market, risk_multiplier)
 
         all_results = self._scanner_service.get_scan_results()
         trend_candidates = [
@@ -657,12 +660,22 @@ class AutoTraderService:
                 return True
         return False
 
-    def _risk_multiplier_from_vix(self) -> float:
-        """Derates new-position risk when the VIX is elevated -- purely a
-        trading-decision input, never fed into the Opportunity Score itself
-        (see app/macro/models.py). Fails open (1.0, no derating) whenever
-        macro data isn't wired up or VIX isn't in this market's indicator
-        list -- BIST's macro_indicators has no ^VIX today."""
+    def _risk_multiplier(self) -> float:
+        """Derates new-position risk when the current market looks unusually
+        volatile -- purely a trading-decision input, never fed into the
+        Opportunity Score itself. Two independent sources, never both wired
+        for the same market: volatility_regime_service (self-computed from
+        the market's own benchmark index -- see app/volatility_regime/)
+        takes priority when present. It's wired up for BIST (which never
+        had VIX at all) and Crypto (which used to borrow the S&P's ^VIX --
+        replaced after backtesting showed a market-native measure gave
+        Crypto a materially better max drawdown for the same Sharpe).
+        Global keeps reading real ^VIX from macro_service below instead --
+        confirmed by the same backtesting that real VIX is a better-matched
+        signal there than the self-computed alternative, so it wasn't
+        touched. Fails open (1.0, no derating) if neither is wired up."""
+        if self._volatility_regime_service is not None:
+            return self._volatility_regime_service.get_risk_multiplier()
         if self._macro_service is None:
             return 1.0
         vix = next(

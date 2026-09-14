@@ -12,12 +12,11 @@ router = APIRouter(prefix="/api/{market}/backtest", tags=["backtest"])
 
 # Static per-market config the backtest engine needs but MarketContext
 # doesn't carry -- same spirit as the hardcoded macro_indicators lists in
-# app/main.py's lifespan(). BIST has no ^VIX in its macro indicators today
-# (see autotrader_service.py's fail-open VIX handling), so it's left out
-# of the VIX-available set rather than faked.
+# app/main.py's lifespan(). Which risk-multiplier source each market uses
+# (real VIX vs. a self-derived one from its own benchmark) is decided
+# inside run_backtest() itself from `market`, not passed in from here.
 _TICKER_SUFFIX_BY_MARKET: dict[str, str] = {"global": "", "bist": ".IS", "crypto": "-USD"}
 _BENCHMARK_BY_MARKET: dict[str, str] = {"global": "^GSPC", "bist": "XU100.IS", "crypto": "BTC-USD"}
-_VIX_AVAILABLE_MARKETS: frozenset[str] = frozenset({"global", "crypto"})
 
 
 @router.post("/run")
@@ -35,7 +34,6 @@ async def run_market_backtest(request: Request, market: str, payload: BacktestRe
         symbols=ctx.universe.symbols,
         ticker_suffix=_TICKER_SUFFIX_BY_MARKET.get(market, ""),
         benchmark_symbol=_BENCHMARK_BY_MARKET.get(market),
-        vix_available=market in _VIX_AVAILABLE_MARKETS,
         initial_cash=payload.initial_cash,
         years=payload.years,
     )

@@ -419,7 +419,7 @@ def test_run_backtest_with_no_historical_data_returns_empty_result(monkeypatch):
 
     result = run_backtest(
         market="test", symbols=["AAPL"], ticker_suffix="", benchmark_symbol="^GSPC",
-        vix_available=False, initial_cash=10_000.0, years=3,
+        initial_cash=10_000.0, years=3,
     )
 
     assert result.symbols_included == 0
@@ -435,7 +435,7 @@ def test_run_backtest_end_to_end_on_a_realistic_uptrend(monkeypatch):
 
     result = run_backtest(
         market="test", symbols=["AAPL"], ticker_suffix="", benchmark_symbol=None,
-        vix_available=False, initial_cash=10_000.0, years=3,
+        initial_cash=10_000.0, years=3,
     )
 
     assert result.symbols_included == 1
@@ -486,10 +486,42 @@ def test_gap_day_produces_no_trade_for_the_affected_symbol(monkeypatch):
 
     result = run_backtest(
         market="test", symbols=["AAPL", "MSFT"], ticker_suffix="", benchmark_symbol=None,
-        vix_available=False, initial_cash=10_000.0, years=3,
+        initial_cash=10_000.0, years=3,
     )
 
     assert not any(t.symbol == "MSFT" and t.date.date() == gap_date for t in result.trades)
+
+
+def test_run_backtest_reads_real_vix_only_for_global(monkeypatch):
+    # The one thing actually at risk in resolving the VIX-vs-volatility-
+    # regime source from `market` internally (replacing the old
+    # vix_available flag) rather than a per-symbol construction/math check
+    # -- multiplier_series_by_date() already has its own direct unit tests
+    # for that, and the real-data A/B backtests that motivated this feature
+    # already proved the integration produces sensible results.
+    bars = _realistic_uptrend_bars(days=100, base_volume=2_000_000.0)
+    fetched_single_series_symbols: list[str] = []
+
+    def _fake_fetch_single(symbol, years):
+        fetched_single_series_symbols.append(symbol)
+        return []
+
+    monkeypatch.setattr(backtest_engine, "fetch_historical_series", lambda *a, **k: {"AAPL": bars})
+    monkeypatch.setattr(backtest_engine, "fetch_single_series", _fake_fetch_single)
+
+    run_backtest(
+        market="global", symbols=["AAPL"], ticker_suffix="", benchmark_symbol="^GSPC",
+        initial_cash=10_000.0, years=3,
+    )
+    assert "^VIX" in fetched_single_series_symbols
+
+    fetched_single_series_symbols.clear()
+    run_backtest(
+        market="bist", symbols=["AAPL"], ticker_suffix="", benchmark_symbol="XU100.IS",
+        initial_cash=10_000.0, years=3,
+    )
+    assert "^VIX" not in fetched_single_series_symbols
+    assert "XU100.IS" in fetched_single_series_symbols  # benchmark still fetched, just not treated as VIX
 
 
 def test_run_backtest_liquidates_any_position_still_open_at_the_end(monkeypatch):
@@ -499,7 +531,7 @@ def test_run_backtest_liquidates_any_position_still_open_at_the_end(monkeypatch)
 
     result = run_backtest(
         market="test", symbols=["AAPL"], ticker_suffix="", benchmark_symbol=None,
-        vix_available=False, initial_cash=10_000.0, years=3,
+        initial_cash=10_000.0, years=3,
     )
 
     assert portfolio_is_fully_closed(result)

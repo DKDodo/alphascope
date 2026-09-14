@@ -17,6 +17,7 @@ from app.scanner.universe import Universe
 from app.services.market_service import MarketService
 from app.services.scanner_service import ScannerService
 from app.signals.signal_tracking_service import SignalTrackingService
+from app.volatility_regime.volatility_regime_service import VolatilityRegimeService
 
 
 @dataclass
@@ -33,4 +34,5 @@ class MarketContext:
     macro_service: MacroService | None = None
     signal_tracking_service: SignalTrackingService | None = None
     daily_trend_service: DailyTrendService | None = None
+    volatility_regime_service: VolatilityRegimeService | None = None
     note: str | None = None

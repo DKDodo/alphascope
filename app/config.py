@@ -192,6 +192,15 @@ class Settings(BaseSettings):
         default=21_600.0, validation_alias="DAILY_TREND_POLL_INTERVAL_SECONDS"
     )
 
+    # How often to recompute BIST's and Crypto's self-derived realized-
+    # volatility risk multiplier (app/volatility_regime/) -- Global keeps
+    # using real VIX instead (a genuinely better-matched, already-available
+    # signal there, confirmed by backtest, not assumed). Same day-scale
+    # cadence as daily_trend -- a volatility regime doesn't flip hourly.
+    volatility_regime_poll_interval_seconds: float = Field(
+        default=21_600.0, validation_alias="VOLATILITY_REGIME_POLL_INTERVAL_SECONDS"
+    )
+
     # Matches the dashboard's own 60s macro-strip refresh (app.js) so the
     # displayed numbers actually change on most refreshes instead of only
     # every few cycles.

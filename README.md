@@ -361,6 +361,12 @@ See `.env.example`. Key settings:
 - `app/daily_trend/` — daily-bar (EMA50/EMA200) trend direction per symbol,
   polled far less often than intraday bars. Used only as an AutoTrader entry
   gate (see below), not by the short-term Opportunity Score.
+- `app/volatility_regime/` — self-computed realized-volatility risk
+  multiplier from a market's own benchmark, in place of VIX for BIST
+  (never had one) and Crypto (used to borrow the S&P's, replaced after
+  backtesting favored a market-native measure). `multiplier_series_by_date()`
+  is the one piece of actual math, shared by the live poller and the
+  backtest replay so the two can't quietly diverge.
 - `app/autotrader/` — self-driving N-day paper trading simulation, persisted
   to SQLite (`app/autotrader/db_models.py`) so a run survives a restart.
   Entry uses `AUTOTRADER_ENTRY_SCORE_MIN`, AutoTrader's own score bar —
@@ -395,8 +401,16 @@ See `.env.example`. Key settings:
   opens on a STRONG `DipOpportunity` even without a trend-following buy
   setup (trade-logged separately as "Dip Fırsatı"). Both entry paths require
   the daily-bar trend (`app/daily_trend/`, EMA50 vs EMA200) not to be
-  confirmed down, and new-position risk is derated when VIX is elevated —
-  none of this touches the Opportunity Score itself, only which symbols the
+  confirmed down, and new-position risk is derated when the market looks
+  unusually volatile. Global reads real VIX for that (`app/macro/`); BIST
+  and Crypto instead use `app/volatility_regime/`'s self-computed measure
+  (20-day realized volatility of the market's own benchmark — XU100.IS,
+  BTC-USD — against its own trailing percentile history, no VIX needed) —
+  BIST never had a real VIX to read, and Crypto used to borrow the S&P's,
+  replaced after backtesting showed a market-native measure gave Crypto a
+  materially better max drawdown for the same Sharpe, while real VIX still
+  outperformed the self-computed alternative for Global specifically. None
+  of this touches the Opportunity Score itself, only which symbols the
   simulation actually buys and how large those positions are. Both entry
   paths also skip a symbol whose long-term fundamentals outlook (see
   "Uzun vadeli görünüm" below) is confirmed UNFAVORABLE, and likewise skip

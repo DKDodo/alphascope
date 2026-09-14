@@ -21,7 +21,11 @@ daily-trend confirmation gate is redundant once the base timeframe
 already IS daily bars. The correlation gate (MAX_CORRELATION_WITH_OPEN_POSITION)
 IS replayed, unlike those -- it only needs price history, which this
 replay already has in full, computed strictly from bars up to (never
-past) the day being replayed so it can't see the future.
+past) the day being replayed so it can't see the future. So is the
+volatility-regime risk derating (app/volatility_regime/) that BIST and
+Crypto use in place of VIX -- same reasoning, same lookahead-safety, and
+it reuses benchmark_series (already fetched here for benchmark_return_pct)
+rather than a second request.
 """
 from __future__ import annotations
 
@@ -57,6 +61,7 @@ from app.risk.risk_engine import RiskEngine
 from app.scanner.scanner_engine import ScannerEngine
 from app.signals.models import SignalResult, SignalType
 from app.signals.signal_engine import SignalEngine
+from app.volatility_regime.volatility_regime_provider import multiplier_series_by_date
 
 logger = get_logger(__name__)
 
@@ -86,14 +91,31 @@ def run_backtest(
     symbols: list[str],
     ticker_suffix: str,
     benchmark_symbol: str | None,
-    vix_available: bool,
     initial_cash: float,
     years: int,
 ) -> BacktestResult:
     series = fetch_historical_series(symbols, ticker_suffix, years)
     benchmark_series = fetch_single_series(benchmark_symbol, years) if benchmark_symbol else []
-    vix_series = fetch_single_series("^VIX", years) if vix_available else []
-    vix_by_date = {bar.timestamp.date(): bar.close for bar in vix_series}
+
+    # Global reads real ^VIX (a genuinely better-matched signal there,
+    # confirmed by backtest, not assumed -- see autotrader_service.py's
+    # _risk_multiplier() docstring). Every other market self-derives its
+    # risk multiplier from its own benchmark instead (app/volatility_regime/)
+    # -- reusing benchmark_series, already fetched above for
+    # benchmark_return_pct, rather than a second request.
+    if market == "global":
+        vix_series = fetch_single_series("^VIX", years)
+        vix_by_date = {bar.timestamp.date(): bar.close for bar in vix_series}
+        volatility_multiplier_by_date: dict[date_type, float] = {}
+    else:
+        vix_by_date = {}
+        volatility_multiplier_by_date = (
+            multiplier_series_by_date(
+                [b.timestamp.date() for b in benchmark_series], [b.close for b in benchmark_series]
+            )
+            if benchmark_series
+            else {}
+        )
 
     if not series:
         return _empty_result(market, years, initial_cash, benchmark_symbol, len(symbols))
@@ -153,7 +175,11 @@ def run_backtest(
         max_drawdown = max(max_drawdown, drawdown)
 
         if drawdown < max_drawdown_fraction and len(open_meta) < MAX_CONCURRENT_POSITIONS:
-            risk_multiplier = _risk_multiplier_from_vix(vix_by_date.get(current_date))
+            risk_multiplier = (
+                _risk_multiplier_from_vix(vix_by_date.get(current_date))
+                if market == "global"
+                else volatility_multiplier_by_date.get(current_date, 1.0)
+            )
             _process_entries(
                 portfolio, trades, open_meta, signals_today, risk_multiplier, current_date,
                 sorted_dates_by_symbol, sorted_closes_by_symbol,

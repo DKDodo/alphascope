@@ -129,6 +129,17 @@ class _FakeDailyTrendService:
         return self._closes.get(symbol.upper())
 
 
+class _FakeVolatilityRegimeService:
+    """Minimal stand-in for VolatilityRegimeService: _risk_multiplier()
+    only calls get_risk_multiplier()."""
+
+    def __init__(self, multiplier: float = 1.0) -> None:
+        self._multiplier = multiplier
+
+    def get_risk_multiplier(self) -> float:
+        return self._multiplier
+
+
 def _synthetic_closes(n: int = MIN_CORRELATION_SAMPLES + 10) -> list[float]:
     """A deterministic (not random) alternating-step series with genuine,
     non-zero variance in its returns -- a flat/constant series would give
@@ -208,12 +219,12 @@ def scanner():
 
 def _service(
     session_factory, scanner, fundamentals=None, macro=None, news=None, market="test", notifier=None,
-    daily_trend=None,
+    daily_trend=None, volatility_regime=None,
 ) -> AutoTraderService:
     return AutoTraderService(
         session_factory=session_factory, market=market, currency_symbol="₺", scanner_service=scanner,
         fundamentals_service=fundamentals, macro_service=macro, news_service=news, notifier=notifier,
-        daily_trend_service=daily_trend,
+        daily_trend_service=daily_trend, volatility_regime_service=volatility_regime,
     )
 
 
@@ -647,6 +658,37 @@ def test_position_size_unaffected_without_a_macro_service(session_factory, scann
 
     status = svc.get_status()
     assert status.positions[0].quantity * 100.0 == pytest.approx(2000.0)
+
+
+def test_position_size_reduced_by_volatility_regime_service(session_factory, scanner):
+    # BIST/Crypto's source (app/volatility_regime/) instead of VIX -- same
+    # derating tiers, different signal.
+    volatility_regime = _FakeVolatilityRegimeService(multiplier=0.25)
+    svc = _service(session_factory, scanner, volatility_regime=volatility_regime)
+    svc.start_run(initial_cash=10_000.0, duration_days=7.0)
+    scanner.set_signal("AAPL", SignalType.STRONG_BUY_SETUP, price=100.0, stop_loss=95.0, score=90)
+
+    svc._tick_sync()
+
+    status = svc.get_status()
+    assert status.positions[0].quantity * 100.0 == pytest.approx(1000.0)
+
+
+def test_volatility_regime_service_takes_priority_over_macro_vix(session_factory, scanner):
+    # Both wired up at once shouldn't happen in production (main.py never
+    # passes both for the same market), but the priority must still be
+    # unambiguous: volatility_regime_service wins.
+    macro = _FakeMacroService()
+    macro.set_vix(35.0)  # would otherwise mean 0.25x
+    volatility_regime = _FakeVolatilityRegimeService(multiplier=1.0)  # says "no derating"
+    svc = _service(session_factory, scanner, macro=macro, volatility_regime=volatility_regime)
+    svc.start_run(initial_cash=10_000.0, duration_days=7.0)
+    scanner.set_signal("AAPL", SignalType.STRONG_BUY_SETUP, price=100.0, stop_loss=95.0, score=90)
+
+    svc._tick_sync()
+
+    status = svc.get_status()
+    assert status.positions[0].quantity * 100.0 == pytest.approx(2000.0)  # flat 20% cap -- VIX ignored
 
 
 def test_entry_skipped_when_daily_trend_is_confirmed_down(session_factory, scanner):

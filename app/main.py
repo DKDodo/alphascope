@@ -61,6 +61,7 @@ from app.services.scanner_service import ScannerService
 from app.signals.signal_engine import SignalEngine
 from app.signals.signal_tracking_service import SignalTrackingService
 from app.storage.database import Database
+from app.volatility_regime.volatility_regime_service import VolatilityRegimeService
 
 logger = get_logger(__name__)
 
@@ -211,6 +212,7 @@ def _build_context(
     macro_indicators: list[tuple[str, str, str]] | None = None,
     note: str | None = None,
     fundamentals_enabled: bool = True,
+    volatility_regime_benchmark: str | None = None,
 ) -> MarketContext:
     event_bus: AsyncEventBus[MarketEvent] = AsyncEventBus()
     scanner_engine = ScannerEngine()
@@ -242,6 +244,16 @@ def _build_context(
         ticker_suffix=news_ticker_suffix,
         poll_interval_seconds=settings.daily_trend_poll_interval_seconds,
     )
+
+    # None (Global) means AutoTraderService falls back to real VIX from
+    # macro_service instead -- see its _risk_multiplier() docstring for why
+    # each market ended up on the source it did.
+    volatility_regime_service = None
+    if volatility_regime_benchmark is not None:
+        volatility_regime_service = VolatilityRegimeService(
+            benchmark_symbol=volatility_regime_benchmark,
+            poll_interval_seconds=settings.volatility_regime_poll_interval_seconds,
+        )
 
     market_service = MarketService(provider=provider, event_bus=event_bus, symbols=universe.symbols)
     scanner_service = ScannerService(
@@ -303,6 +315,7 @@ def _build_context(
         news_service=news_service,
         notifier=notifier,
         daily_trend_service=daily_trend_service,
+        volatility_regime_service=volatility_regime_service,
     )
 
     signal_tracking_service = SignalTrackingService(
@@ -325,6 +338,7 @@ def _build_context(
         macro_service=macro_service,
         signal_tracking_service=signal_tracking_service,
         daily_trend_service=daily_trend_service,
+        volatility_regime_service=volatility_regime_service,
         note=note,
     )
 
@@ -406,6 +420,7 @@ async def lifespan(app: FastAPI):
             starting_cash=settings.bist_initial_paper_cash,
             db=db,
             notifier=notifier,
+            volatility_regime_benchmark="XU100.IS",
             news_ticker_suffix=".IS",
             macro_indicators=[
                 ("USDTRY=X", "USD/TRY", "Dolar/TL kuru — TL değer kaybı BIST'teki TL bazlı kazancı eritebilir"),
@@ -431,6 +446,7 @@ async def lifespan(app: FastAPI):
             starting_cash=settings.crypto_initial_paper_cash,
             db=db,
             notifier=notifier,
+            volatility_regime_benchmark="BTC-USD",
             news_ticker_suffix="-USD",
             fundamentals_enabled=False,
             macro_indicators=[
@@ -488,6 +504,8 @@ async def lifespan(app: FastAPI):
             await ctx.signal_tracking_service.start()
         if ctx.daily_trend_service is not None:
             await ctx.daily_trend_service.start()
+        if ctx.volatility_regime_service is not None:
+            await ctx.volatility_regime_service.start()
 
     for key in unavailable_this_run:
         del contexts[key]
@@ -497,6 +515,8 @@ async def lifespan(app: FastAPI):
     finally:
         logger.info("shutting down alphascope")
         for ctx in contexts.values():
+            if ctx.volatility_regime_service is not None:
+                await ctx.volatility_regime_service.stop()
             if ctx.daily_trend_service is not None:
                 await ctx.daily_trend_service.stop()
             if ctx.signal_tracking_service is not None:
