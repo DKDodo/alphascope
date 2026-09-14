@@ -1,0 +1,22 @@
+name: Keep Render deploy awake
+
+# Render's free tier spins the web service down after ~15 minutes with no
+# incoming request, and the next request pays a slow cold-start (seen
+# locally: ~14s cold vs ~1.6s warm). Pinging /health every 10 minutes
+# (comfortably under that 15-minute window) keeps it warm so AutoTrader
+# ticks, scanning, and signal tracking keep running continuously without
+# needing any machine of the user's own to stay on. /health is cheap (one
+# SQLite "SELECT 1", no side effects) and always unauthenticated even when
+# ACCESS_PASSWORD is set (see app/main.py's auth middleware), so this needs
+# no secret.
+on:
+  schedule:
+    - cron: "*/10 * * * *"
+  workflow_dispatch: {}
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping /health
+        run: curl -sf --max-time 30 https://alphascope-91q7.onrender.com/health
